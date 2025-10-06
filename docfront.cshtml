@@ -801,6 +801,7 @@
     var currentFullCode = '';
     var currentDocumentName = '';
     const t = @Html.Raw(Newtonsoft.Json.JsonConvert.SerializeObject(t));
+    const BLOCK_LEVEL_TAGS = ['DIV', 'P', 'LI', 'UL', 'OL', 'SECTION', 'ARTICLE', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'];
 
     function getCookie(c) { let n = c + "="; let d = decodeURIComponent(document.cookie); let a = d.split(';'); for (let i = 0; i < a.length; i++) { let f = a[i].trim(); if (f.indexOf(n) == 0) return f.substring(n.length, f.length); } return ""; }
     function uuid() { return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8); return v.toString(16); }); }
@@ -872,6 +873,34 @@
             } else { v2Json.Elements.push(el); }
         });
         return { success: true, json: v2Json };
+    }
+
+    function extractTextPreservingLineBreaks(node, isRoot = true) {
+        if (!node) return '';
+        if (node.nodeType === Node.TEXT_NODE) {
+            return node.textContent;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) {
+            return '';
+        }
+
+        const tagName = node.tagName ? node.tagName.toUpperCase() : '';
+        if (tagName === 'BR') {
+            return '\n';
+        }
+        if (tagName === 'INPUT' && node.type && node.type.toLowerCase() === 'checkbox') {
+            return node.checked ? '☑' : '☐';
+        }
+
+        let text = '';
+        for (let i = 0; i < node.childNodes.length; i++) {
+            text += extractTextPreservingLineBreaks(node.childNodes[i], false);
+        }
+
+        if (!isRoot && tagName && BLOCK_LEVEL_TAGS.includes(tagName) && text && !text.endsWith('\n')) {
+            text += '\n';
+        }
+        return text;
     }
 
     function preprocessTemplateData(json) {
@@ -1039,22 +1068,9 @@ function escapeHtml(text) {
                 return;
             }
 
-            let newTextContent = "";
-            domElement.contents().each(function() {
-                if (this.nodeType === Node.TEXT_NODE) {
-                    newTextContent += this.textContent;
-                } else if (this.nodeType === Node.ELEMENT_NODE) {
-                    if (this.tagName.toLowerCase() === 'input' && this.type.toLowerCase() === 'checkbox') {
-                        newTextContent += this.checked ? '☑' : '☐';
-                    } else if (this.tagName.toLowerCase() === 'br') {
-                        newTextContent += '\n';
-                    } else {
-                        newTextContent += $(this).text();
-                    }
-                }
-            });
-
-            newTextContent = newTextContent.replace(/\u00A0/g, ' ').replace(/\u2003/g, '\t');
+            let newTextContent = extractTextPreservingLineBreaks(domElement[0]);
+            newTextContent = newTextContent.replace(/\r/g, '').replace(/\u00A0/g, ' ').replace(/\u2003/g, '\t');
+            newTextContent = newTextContent.replace(/\n+$/g, '');
 
             if (targetArray.length > 0) {
                 targetArray[0].Text = newTextContent;
