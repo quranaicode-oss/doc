@@ -443,15 +443,7 @@
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         overflow: auto;
     }
-    #documentContent td {
-        background-color: white;
-        color: black;
-      
-    }
-        #documentContent span {
-            background-color: white;
-            color: black;
-        }
+
     body.dark-version #documentContent {
         /*  background-color: #2a2a2a;
         color: white; */
@@ -476,13 +468,13 @@
     #documentContent table,
     #documentContent th,
     #documentContent td {
-        border: 1px solid #ddd;
+        border: 1px solid #b5a1a1;
     }
 
     body.dark-version #documentContent table,
     body.dark-version #documentContent th,
     body.dark-version #documentContent td {
-        border: 1px solid #ddd;
+        border: 1px solid #b5a1a1;
     }
 
     #documentContent th,
@@ -529,7 +521,7 @@
         }
 
         #documentContent td {
-            border: 1px solid #ddd;
+            border: 1px solid #b5a1a1;
             padding: 8px;
             min-width: 45px; /* حد أدنى للعرض، يمكنك تعديل القيمة حسب الحاجة */
             vertical-align: top;
@@ -628,6 +620,7 @@
     }
 
     .modal-footer {
+        border-top: none;
         padding: 15px 20px;
     }
 
@@ -815,7 +808,7 @@
 </style>
 
 <div class="header-icon">
-    <a href="../../ERP2/Doc">
+    <a href="../../ERP2/doc">
         <i class="fa fa-arrow-left"></i>
     </a>
     <h6>@t["fileManagementSystem"]</h6>
@@ -824,7 +817,7 @@
 <h5>@dpath</h5>
 <hr />
 <div class="header-icon">
-    <a href="../../ERP2/Doc">
+    <a href="../../ERP2/doc">
         <i class="fa fa-arrow-left"></i>
     </a>
     <h6>@t["fileManagementSystem"]</h6>
@@ -896,7 +889,7 @@
             string Docs_path = rw["Docs_path"].ToString();
             string curid = rw["ID"].ToString();
 
-            string href = $"{Request.Url.Scheme}://{Request.Url.Host}/ERP2/Doc?p={System.Web.HttpUtility.UrlEncode(Docs_path)}&fid={curid}";
+            string href = $"{Request.Url.Scheme}://{Request.Url.Host}/ERP2/doc?p={System.Web.HttpUtility.UrlEncode(Docs_path)}&fid={curid}";
             string divhtml = "<div class=\"folder-icon\">\r\n    <i class=\"fa fa-folder\"></i>\r\n</div>";
             if (icon != "")
             {
@@ -995,7 +988,7 @@
                             fileName = Path.GetFileName(file);
                             fileFullPath = Path.GetFullPath(file);
                             filpath = fileFullPath.Replace(HttpRuntime.AppDomainAppPath, "");
-                            slins = $"DC_insert N'{fileName}' ,N'{filpath}' ,'{fid}','{DBHelper.CompId()}'";
+                            slins = $"DC_insert N'{fileName}' ,N'{filpath}' ,'{fid}','{DBHelp=er.CompId()}'";
                             dtFile = DBHelper.Gettabel(SqlProtect.procedstring(slins), DBHelper.accesstokenwrite);
 
                             string docid = dtFile.Rows[0]["ID"].ToString();
@@ -1015,9 +1008,13 @@
                             {
 
                             }
+                            // string docid = dtFile.Rows[0]["ID"].ToString();
+
                             <div class="file">
                                 <i class="fa fa-file"></i>
-                                <span data-filpath="@filpath" class="file-name">@t["errorLoading"] </span>
+                                <i class="fa fa-file"></i>
+                                <span data-filpath="@filpath" class="file-name">@fileName</span>
+                                <span>@t["errorLoading"] </span>
                             </div>
                             <script>
                                 console.log("slins", `@slins.Replace("\\","\\\\")`);
@@ -1052,7 +1049,42 @@
         </div>
     </div>
 </div>
+<style>
+    .loader-overlay {
+        position: fixed; /* لتغطية الشاشة بالكامل */
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5); /* خلفية سوداء شبه شفافة */
+        z-index: 9999; /* لضمان ظهوره فوق كل العناصر */
+        display: none; /* يكون مخفيًا بشكل افتراضي */
+        justify-content: center;
+        align-items: center;
+    }
 
+    .loader-spinner {
+        border: 8px solid #f3f3f3; /* رمادي فاتح */
+        border-top: 8px solid #007bff; /* أزرق */
+        border-radius: 50%;
+        width: 60px;
+        height: 60px;
+        animation: spin 1s linear infinite;
+    }
+
+    @@keyframes spin {
+        0% {
+            transform: rotate(0deg);
+        }
+
+        100% {
+            transform: rotate(360deg);
+        }
+    }
+</style>
+<div id="global-loader" class="loader-overlay">
+    <div class="loader-spinner"></div>
+</div>
 <script>
 function uuid() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
@@ -1088,12 +1120,34 @@ var currentFilePath = '';
 var docid = '';
 var isRequestInProgress = false;
 
-function showLoading() {
-    $('.loading-icon').show();
+
+function showLoading(element = null, loadingText = ' جارِ التحميل...') {
+  if (element) {
+    element.setAttribute('data-original-content', element.innerHTML);
+    element.disabled = true;
+    element.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>${loadingText}`;
+  } else {
+    const globalLoader = document.getElementById('global-loader');
+    if (globalLoader) {
+      globalLoader.style.display = 'flex'; // إظهار شاشة التحميل
+    }
+  }
 }
 
-function hideLoading() {
-    $('.loading-icon').hide();
+
+function hideLoading(element = null) {
+  if (element) {
+    const originalContent = element.getAttribute('data-original-content');
+    if (originalContent) {
+      element.innerHTML = originalContent;
+    }
+    element.disabled = false;
+  } else {
+    const globalLoader = document.getElementById('global-loader');
+    if (globalLoader) {
+      globalLoader.style.display = 'none'; // إخفاء شاشة التحميل
+    }
+  }
 }
 
 function displayDocumentElements() {
@@ -1152,9 +1206,9 @@ function displayDocumentElements() {
                     let tablebordersbottom=``;
                     if (element.hasOwnProperty("Borders")) {
                         tablebordersLeft=element?.Borders?.Left? `border-left-style: ${element?.Borders?.Left};border-left: ${element?.Borders?.Left};`:'';
-                        tablebordersright=element?.Borders?.Right? `border-right-style: ${element?.Borders?.Right};border-right: ${element?.Borders?.Right};`:'';
-                        tableborderstop=element?.Borders?.Top? `border-top-style: ${element?.Borders?.Top};border-top: ${element?.Borders?.Top};`:'';
-                        tablebordersbottom=element?.Borders?.Bottom? `border-bottom-style: ${element?.Borders?.Bottom};border-bottom: ${element?.Borders?.Bottom};`:'';
+                        tablebordersright = element?.Borders?.Right ? `border-right-style: ${element?.Borders?.Right};border-right: ${element?.Borders?.Right};` : '';
+                        tableborderstop = element?.Borders?.Top ? `border-top-style: ${element?.Borders?.Top};border-top: ${element?.Borders?.Top};` : '';
+                        tablebordersbottom = element?.Borders?.Bottom ? `border-bottom-style: ${element?.Borders?.Bottom};border-bottom: ${element?.Borders?.Bottom};` : '';
                         styleTable = tablebordersLeft+tablebordersright+tableborderstop+tablebordersbottom;
                         styleTable += `direction: ${element?.Borders?.Direction};`;
 
@@ -1281,19 +1335,100 @@ function initializeDocumentView(docId, filePath, recordIdToLoad) {
             cols: "ID,document_name,code,full_code,file_path,document_description,lang,file_name,file_extension,Document_status_name",
             parm: `('${docid}','${userLang}')`
         }),
-        $.post("../../API/doc/read", { filePath: currentFilePath })
+        $.post("../../api/doc2/read", { filePath: currentFilePath })
     ).done(function(infoResponse, docResponse) {
         const infoData = infoResponse[0][0];
         const docData = docResponse[0];
 
         if (infoData && infoData.ID) {
-            let fileInfoHtml = `<h3>${infoData.document_name || ''}</h3><p><strong>${t.fullCode}:</strong> ${infoData.full_code}</p><p><strong>${t.documentDescription}:</strong> ${infoData.document_description || ''}</p><p><strong>${t.filePath}:</strong> ${infoData.file_path}</p><div class="form-group"><label for="fileUploadTemplate">${t.upload} Template (docx):</label><input type="file" id="fileUploadTemplate" accept=".docx" class="form-control" /><button id="uploadTemplateButton" onclick="UpdateCurrentDocumnent()" class="btn btn-danger mt-2">${t.upload} <i class="fa fa-file-o"></i></button><div id="uploadTemplateStatus"></div><div id="progressBarContainer" style="margin-top: 10px; background: #ccc;"><div id="progressBar" style="width: 0%; background: green; color: white; text-align: center;">0%</div></div></div><button id="downloadButton" class="btn btn-success">${t.download} <i class="fa fa-download"></i></button>`;
+let fileInfoHtml = `<h3>${infoData.document_name || ''}</h3><p><strong>${t.fullCode}:</strong> ${infoData.full_code}</p><p><strong>${t.documentDescription}:</strong> ${infoData.document_description || ''}</p><p><strong>${t.filePath}:</strong> ${infoData.file_path}</p><div class="form-group"><label for="fileUploadTemplate">${t.upload} Template (docx):</label><input type="file" id="fileUploadTemplate" accept=".docx" class="form-control" /><button id="uploadTemplateButton" onclick="UpdateCurrentDocumnent()" class="btn btn-danger mt-2">${t.upload} <i class="fa fa-file-o"></i></button><div id="uploadTemplateStatus"></div><div id="progressBarContainer" style="margin-top: 10px; background: #ccc;"><div id="progressBar" style="width: 0%; background: green; color: white; text-align: center;">0%</div></div></div><button id="downloadButton" data-filepath="${infoData.file_path}" class="btn btn-success">${t.download} <i class="fa fa-download"></i></button><button id="viewFullObjectButton" class="btn btn-info">Show (Console) <i class="fa fa-terminal"></i></button>`;
             $('#tab-info').html(fileInfoHtml);
+$(document).on('click', '#viewFullObjectButton', function () {
+        if (!currentFilePath) {
+            alert('الرجاء تحديد ملف أولاً.');
+            return;
+        }
 
-            $('#tab-info').on('click', '#downloadButton', function () {
-                let downloadUrl = '/' + encodeURIComponent(infoData.file_path.replace(/\\/g, '/'));
-                window.open(downloadUrl, '_blank');
+        console.log(`%c[INFO] جارِ طلب الكائن الكامل للملف: ${currentFilePath}`, 'color: blue; font-weight: bold;');
+
+        // إظهار أيقونة تحميل مؤقتة
+        const originalText = $(this).html();
+        $(this).html('جارِ التحميل... <i class="fa fa-spinner fa-spin"></i>').prop('disabled', true);
+
+        const url = `../../api/doc2?id=fullObject&filePath=${encodeURIComponent(currentFilePath)}`;
+
+        fetch(url)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`فشل الطلب: ${response.status} ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    console.log('%c[SUCCESS] تم استلام بنية المستند بنجاح:', 'color: green; font-weight: bold;');
+
+                    // طباعة الكائن في الـ console لسهولة التصفح
+                    console.dir(data.documentTree);
+
+                } else {
+                    throw new Error(data.message || 'حدث خطأ غير معروف في الـ API.');
+                }
+            })
+            .catch(error => {
+                console.error('%c[ERROR] حدث خطأ أثناء طلب الكائن الكامل:', 'color: red; font-weight: bold;', error);
+                alert(`فشل تحميل الكائن: ${error.message}`);
+            })
+            .finally(() => {
+                // إعادة الزر إلى حالته الأصلية
+                $('#viewFullObjectButton').html(originalText).prop('disabled', false);
             });
+    });
+
+$(document).on('click', '#downloadButton', function () {
+    if (isRequestInProgress) {
+        console.warn("Download prevented: a view is currently loading.");
+        return;
+    }
+
+    const clickedButton = this;
+    const filePath = $(clickedButton).data('filepath');
+
+    if (!filePath) {
+        alert("File path not found on the button.");
+        return;
+    }
+
+    isRequestInProgress = true;
+    showLoading(clickedButton, ` ${t.loading}`);
+
+    const downloadUrl = '/' + encodeURIComponent(filePath.replace(/\\/g, '/'));
+
+    fetch(downloadUrl)
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok. File might not be accessible.');
+        }
+        return response.blob();
+    })
+    .then(blob => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filePath.split('\\').pop().split('/').pop();
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+    })
+    .catch(err => {
+        alert(`${t.errorProcessing}: ${err.message}`);
+    })
+    .finally(() => {
+        hideLoading(clickedButton);
+        isRequestInProgress = false;
+    });
+});
 
             let toolbarHtml = `<div class="container mt-2 text-center p-2 border rounded" style="direction: ltr;"><div class="toolbar"><button class="toolbar-button" id="newButton" title="${t.new}"><i class="fa fa-file-o"></i></button><button class="toolbar-button" id="saveDataButton" title="${t.save}"><i class="fa fa-save"></i></button><button class="toolbar-button" id="firstButton" title="${t.first}"><i class="fa fa-step-backward"></i></button><button class="toolbar-button" id="prevButton" title="${t.prev}"><i class="fa fa-backward"></i></button><button class="toolbar-button" id="nextButton" title="${t.next}"><i class="fa fa-forward"></i></button><button class="toolbar-button" id="lastButton" title="${t.last}"><i class="fa fa-step-forward"></i></button><input type="text" id="searchInput" placeholder="${t.searchByDocNumber}" class="form-control w-25 d-inline" /><button class="toolbar-button" id="duplicateButton" title="${t.duplicate}"><i class="fa fa-copy"></i></button><button class="toolbar-button" id="downloadDocButton" title="${t.download}"><i class="fa fa-download"></i></button><button class="toolbar-button" id="downloadPdfButton" title="${t.downloadPdf}"><i class="fa fa-file-pdf-o"></i></button><button class="toolbar-button" id="deleteButton" title="${t.delete}"><i class="fa fa-trash"></i></button><button class="toolbar-button" id="printButton" title="${t.print}"><i class="fa fa-print"></i></button><button class="toolbar-button" id="attachmentButton" title="Attachments"><i class="fa fa-paperclip"></i></button></div></div>`;
 
@@ -1411,7 +1546,7 @@ function loadSavedRecord(recordID) {
 
 
     $.when(
-        $.post("../../API/doc/read", { filePath: currentFilePath }),
+        $.post("../../api/doc2/read", { filePath: currentFilePath }),
 
         fetch(`/api/db/mo?action=get_document&db_name=unifood&collection=docs&document_id=${recordID}`).then(res => {
             if (!res.ok) throw new Error('Record not found');
@@ -1451,7 +1586,7 @@ function loadSavedRecord(recordID) {
     });
 }
 function resetDocBtnFun() {
-    $.post("../../API/doc/read", { filePath: currentFilePath }, function (response) {
+    $.post("../../api/doc2/read", { filePath: currentFilePath }, function (response) {
         if(response.success) {
             documentData = response;
             displayDocumentElements();
@@ -1580,7 +1715,7 @@ function uploadFile(file, filePath) {
         status.style.color = "red";
     });
 
-    const url = `/API/doc?id=upload&filePath=${encodeURIComponent(filePath)}`;
+    const url = `/api/doc2?id=upload&filePath=${encodeURIComponent(filePath)}`;
     xhr.open("POST", url, true);
     xhr.send(formData);
 }
@@ -1659,67 +1794,69 @@ $(document).ready(function () {
                 return element;
             });
     }
-    $(document).on('click', '#saveDataButton', function () {
-        if (isRequestInProgress || !docid) return;
-        isRequestInProgress = true;
-        showLoading();
+$(document).on('click', '#saveDataButton', function () {
+    if (isRequestInProgress || !docid) return;
+    isRequestInProgress = true;
+    showLoading();
 
-        let recordID = $("#recordID").val();
-        if (!recordID) { recordID = uuid(); $("#recordID").val(recordID); }
+    let recordID = $("#recordID").val();
+    if (!recordID) {
+        recordID = uuid();
+        $("#recordID").val(recordID);
+    }
 
-        const procQuery = `DC_Documents_records_insert '${recordID}','${docid}','${$("#recordDate").val()}','${$("#recordNotes").val()}','${getCookie("CompId")}','${getCookie("UserBranshID")}','${getCookie("UserID")}'`;
+    const procQuery = `DC_Documents_records_insert '${recordID}','${docid}','${$("#recordDate").val()}','${$("#recordNotes").val()}','${getCookie("CompId")}','${getCookie("UserBranshID")}','${getCookie("UserID")}'`;
 
-        $.post("../../erp/procedq", { id: procQuery }, function (data) {
-            let docData = data[0];
-            $('#documentContent .editable-paragraph').each(function () {
-                const index = $(this).data('index');
-                const newText = $(this).text();
-                if (documentData.json.Elements[index]) {
-                    documentData.json.Elements[index].Content = newText;
-                }
-            });
+    $.post("../../erp/procedq", { id: procQuery }, function (data) {
+        let docData = data[0];
+        $('#documentContent .editable-paragraph').each(function () {
+            const index = $(this).data('index');
+            const newText = $(this).text();
+            if (documentData.json.Elements[index]) {
+                documentData.json.Elements[index].Content = newText;
+            }
+        });
 
-            $('#documentContent .editable-cell').each(function () {
-                const tableIndex = $(this).closest('table').data('index');
-                const rowIndex = $(this).data('row-index');
-                const cellIndex = $(this).data('cell-index');
-                const newValue = $(this).text();
-                if (documentData.json.Elements[tableIndex]) {
-                    documentData.json.Elements[tableIndex].Content[rowIndex].Cells[cellIndex].Content = newValue;
-                }
-            });
+        $('#documentContent .editable-cell').each(function () {
+            const tableIndex = $(this).closest('table').data('index');
+            const rowIndex = $(this).data('row-index');
+            const cellIndex = $(this).data('cell-index');
+            const newValue = $(this).text();
+            if (documentData.json.Elements[tableIndex]) {
+                documentData.json.Elements[tableIndex].Content[rowIndex].Cells[cellIndex].Content = newValue;
+            }
+        });
 
+        const simplifiedElements = simplifyJSon(documentData);
+        docData.documentElements = simplifiedElements;
+        const payload = { db_name: 'unifood', collection: 'docs', documents: [docData] };
 
-            const simplifiedElements =simplifyJSon(documentData) ;
-
-            docData.documentElements = simplifiedElements;
-            const payload = { db_name: 'unifood', collection: 'docs', documents: [docData] };
-            fetch(`../../api/db/mo?action=save_documents`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            }).then(response => response.json()).then(saveResult => {
-                saveResult = saveResult[0];
-                if(saveResult.success) {
-                    alert(t.jsonSaved);
-                    $("#documentNumber").text(docData.document_file_serial);
-                    $(".record-title").text(docData.document_name).css('color', 'black');
-                } else {
-                    alert(t.errorProcessing);
-                }
-            }).catch(error => {
+        fetch(`../../api/db/mo?action=save_documents`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }).then(response => response.json()).then(saveResult => {
+            saveResult = saveResult[0];
+            if (saveResult.success) {
+                alert(t.jsonSaved);
+                // 🚀 *** هذا هو التعديل الأهم ***
+                // بعد الحفظ الناجح، قم بإعادة تحميل بيانات السجل بالكامل
+                loadSavedRecord(docData.ID);
+            } else {
                 alert(t.errorProcessing);
-            }).finally(() => {
-                isRequestInProgress = false;
-                hideLoading();
-            });
-        }).fail(() => {
+            }
+        }).catch(error => {
+            alert(t.errorProcessing);
+        }).finally(() => {
             isRequestInProgress = false;
             hideLoading();
-            alert(t.errorProcessing);
         });
+    }).fail(() => {
+        isRequestInProgress = false;
+        hideLoading();
+        alert(t.errorProcessing);
     });
-
+});
     const createBlobAndDownload = (url, body, fileName) => {
         showLoading();
         fetch(url, {
@@ -1741,42 +1878,195 @@ $(document).ready(function () {
             a.remove();
         }).catch(err => alert(t.errorProcessing)).finally(() => hideLoading());
     };
+$(document).on('click', '#downloadDocButton, .download-file', function () {
+    if (isRequestInProgress) {
+        console.warn("Action prevented: A request is already in progress.");
+        return;
+    }
 
-    $(document).on('click', '#downloadDocButton, .download-file', function () {
-        let docData=documentData;
-        const simplifiedElements =simplifyJSon(docData) ;
+    const clickedButton = this;
+    isRequestInProgress = true;
+    showLoading(clickedButton, ` ${t.loading}`);
+
+    try {
+        let docData = documentData;
+        const simplifiedElements = simplifyJSon(docData);
         docData.documentElements = simplifiedElements;
         const recordid = $(this).hasClass('download-file') ? $(this).data('recordid') : $("#recordID").val();
-        const body = { jsonInput: JSON.stringify(docData.json.Elements), docid: docid, recordid: recordid, filepath: currentFilePath };
-        createBlobAndDownload('../../API/doc/write', body, 'document.docx');
-    });
 
-    $(document).on('click', '#downloadPdfButton, .pdf-download', function () {
-        let docData=documentData;
-        const simplifiedElements =simplifyJSon(docData) ;
+        if (!currentFilePath) {
+            throw new Error("No file path is currently set. Please select a file.");
+        }
+
+        // 🚀 *** هذا هو التعديل الخاص باسم الملف ***
+        //  احصل على اسم الملف من الواجهة
+        const docNameElement = document.querySelector('.file_info_text');
+        const docName = docNameElement ? docNameElement.textContent.trim() : 'document';
+
+
+        const body = {
+            jsonInput: JSON.stringify(docData.json.Elements),
+            docid: docid,
+            recordid: recordid,
+            filepath: currentFilePath
+        };
+
+        fetch('../../API/doc2/write', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+            body: $.param(body)
+        })
+        .then(response => {
+            if (!response.ok) throw new Error('Failed to generate document. The server returned an error.');
+            return response.blob();
+        })
+        .then(blob => {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            // استخدم الاسم الذي حصلت عليه من الواجهة
+            a.download = `${docName}.docx`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+        })
+        .catch(err => {
+            alert(`${t.errorProcessing}: ${err.message}`);
+        })
+        .finally(() => {
+            hideLoading(clickedButton);
+            isRequestInProgress = false;
+        });
+
+    } catch (error) {
+        alert(`${t.errorProcessing}: ${error.message}`);
+        hideLoading(clickedButton);
+        isRequestInProgress = false;
+    }
+});
+	$(document).on('click', '#downloadPdfButton, .pdf-download', function () {
+    if (isRequestInProgress) {
+        console.warn("Action prevented: A request is already in progress.");
+        return;
+    }
+
+    const clickedButton = this;
+    isRequestInProgress = true;
+    showLoading(clickedButton, ` ${t.loading}`);
+
+    try {
+        let docData = documentData;
+        const simplifiedElements = simplifyJSon(docData);
         docData.documentElements = simplifiedElements;
         const recordid = $(this).hasClass('pdf-download') ? $(this).data('recordid') : $("#recordID").val();
-        const body = { jsonInput: JSON.stringify(docData.json.Elements), docid: docid, recordid: recordid, filepath: currentFilePath };
-        createBlobAndDownload('../../API/doc/pdf', body, 'document.pdf');
-    });
 
-    $(document).on('click', '#printButton, .print-file', function () {
-        const recordid = $(this).hasClass('print-file') ? $(this).data('recordid') : $("#recordID").val();
-        let docData=documentData;
-        const simplifiedElements =simplifyJSon(docData) ;
-        docData.documentElements = simplifiedElements;
-        const body = { jsonInput: JSON.stringify(docData.json.Elements), docid: docid, recordid: recordid, filepath: currentFilePath };
-        fetch('../../API/doc/html', {
+        if (!currentFilePath) {
+            throw new Error("No file path is currently set. Please select a file.");
+        }
+
+        const body = {
+            jsonInput: JSON.stringify(docData.json.Elements),
+            docid: docid,
+            recordid: recordid,
+            filepath: currentFilePath
+        };
+
+        fetch('../../API/doc2/pdf', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
             body: $.param(body)
-        }).then(res => res.text()).then(html => {
+        })
+        .then(response => {
+            if (!response.ok) throw new Error('Failed to generate PDF. The server returned an error.');
+            return response.blob();
+        })
+        .then(blob => {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = 'document.pdf';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+        })
+        .catch(err => {
+            alert(`${t.errorProcessing}: ${err.message}`);
+        })
+        .finally(() => {
+            hideLoading(clickedButton);
+            isRequestInProgress = false;
+        });
+
+    } catch (error) {
+        alert(`${t.errorProcessing}: ${error.message}`);
+        hideLoading(clickedButton);
+        isRequestInProgress = false;
+    }
+});
+
+    $(document).on('click', '#printButton, .print-file', function () {
+    if (isRequestInProgress) {
+        console.warn("Action prevented: A request is already in progress.");
+        return;
+    }
+
+    const clickedButton = this;
+    isRequestInProgress = true;
+    showLoading(clickedButton, ` ${t.loading}`);
+
+    try {
+        const recordid = $(this).hasClass('print-file') ? $(this).data('recordid') : $("#recordID").val();
+        let docData = documentData;
+        const simplifiedElements = simplifyJSon(docData);
+        docData.documentElements = simplifiedElements;
+
+        if (!currentFilePath) {
+            throw new Error("No file path is currently set. Please select a file.");
+        }
+
+        const body = {
+            jsonInput: JSON.stringify(docData.json.Elements),
+            docid: docid,
+            recordid: recordid,
+            filepath: currentFilePath
+        };
+
+        fetch('../../API/doc2/html', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
+            body: $.param(body)
+        })
+        .then(res => {
+            if (!res.ok) throw new Error('Failed to generate HTML for printing.');
+            return res.text();
+        })
+        .then(html => {
             const printWindow = window.open('', '_blank');
             printWindow.document.write(html);
             printWindow.document.close();
-            printWindow.onload = function() { printWindow.print(); };
+            // A short delay ensures content is fully rendered before the print dialog opens
+            setTimeout(() => {
+                printWindow.print();
+            }, 500);
+        })
+        .catch(err => {
+            alert(`${t.errorProcessing}: ${err.message}`);
+        })
+        .finally(() => {
+            hideLoading(clickedButton);
+            isRequestInProgress = false;
         });
-    });
+
+    } catch (error) {
+        alert(`${t.errorProcessing}: ${error.message}`);
+        hideLoading(clickedButton);
+        isRequestInProgress = false;
+    }
+});
 
     $(document).on('click', '#deleteButton', function () {
         if (!confirm(t.confirmDelete) || !$("#recordID").val()) return;
@@ -1874,7 +2164,7 @@ $(document).ready(function () {
         formData.append('file', file);
         formData.append('p', '@dpath');
         $.ajax({
-            url: '../../API/DocsFileUpload',
+            url: '../../api/doc2/FileUpload',
             type: 'POST',
             data: formData,
             contentType: false,
@@ -1944,7 +2234,7 @@ $(document).ready(function () {
 
             // AJAX request to upload the template
             $.ajax({
-                url: '../../API/DocsFileUpload',
+                url: '../../api/doc2/FileUpload',
                 type: 'POST',
                 data: formData,
                 contentType: false,
@@ -1982,7 +2272,7 @@ $(document).ready(function () {
 
             // AJAX request to upload the new docx
             $.ajax({
-                url: '../../API/DocsFileUpload',
+                url: '../../api/doc2/FileUpload',
                 type: 'POST',
                 data: formData,
                 contentType: false,
