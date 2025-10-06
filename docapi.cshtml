@@ -831,7 +831,27 @@ private static List<List<JsonRun>> BuildParagraphPayloadFromRuns(List<JsonRun> r
                 continue;
             }
 
-            current.Add(CloneRunWithText(run, run.Text));
+            var runText = run.Text ?? string.Empty;
+            var normalizedText = runText.Replace("\r\n", "\n").Replace("\r", "\n");
+
+            if (normalizedText.Contains("\n"))
+            {
+                var segments = normalizedText.Split('\n');
+                for (int i = 0; i < segments.Length; i++)
+                {
+                    current.Add(CloneRunWithText(run, segments[i]));
+
+                    if (i < segments.Length - 1)
+                    {
+                        payloads.Add(current);
+                        current = new List<JsonRun>();
+                    }
+                }
+
+                continue;
+            }
+
+            current.Add(CloneRunWithText(run, runText));
         }
     }
 
