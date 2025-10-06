@@ -715,27 +715,59 @@ private static void InjectTextToTableSafe(Wp.Table table, JsonTable jsonTable)
                     continue;
                 }
 
-                if (jsonCell.Content != null)
+                bool hasFormattedRuns = jsonCell.FormattedRuns != null &&
+                    jsonCell.FormattedRuns.Any(run => run != null && !string.IsNullOrEmpty(run.Text));
+                bool hasPlainContent = !string.IsNullOrWhiteSpace(jsonCell.Content);
+
+                if (!hasFormattedRuns && !hasPlainContent)
                 {
-                    var firstParagraph = docxCell.Elements<Wp.Paragraph>().FirstOrDefault();
+                    continue;
+                }
 
-                    if (firstParagraph == null)
+                var firstParagraph = docxCell.Elements<Wp.Paragraph>().FirstOrDefault();
+
+                if (firstParagraph == null)
+                {
+                    firstParagraph = new Wp.Paragraph();
+                    docxCell.Append(firstParagraph);
+                }
+
+                var paragraphsToRemove = docxCell.Elements<Wp.Paragraph>().Skip(1).ToList();
+                foreach (var p in paragraphsToRemove)
+                {
+                    p.Remove();
+                }
+
+                if (hasFormattedRuns)
+                {
+                    var payload = new JsonParagraph { Content = new List<object>() };
+                    foreach (var run in jsonCell.FormattedRuns)
                     {
-                        firstParagraph = new Wp.Paragraph();
-                        docxCell.Append(firstParagraph);
-                    }
-                    
-                    var paragraphsToRemove = docxCell.Elements<Wp.Paragraph>().Skip(1).ToList();
-                    foreach (var p in paragraphsToRemove)
-                    {
-                        p.Remove();
+                        if (run == null || run.Text == null) continue;
+                        payload.Content.Add(new JsonRun
+                        {
+                            Text = run.Text,
+                            Formatting = run.Formatting != null
+                                ? new Dictionary<string, bool>(run.Formatting)
+                                : new Dictionary<string, bool>(),
+                            FormattingValues = run.FormattingValues != null
+                                ? new Dictionary<string, string>(run.FormattingValues)
+                                : new Dictionary<string, string>()
+                        });
                     }
 
-                    var tempJsonPara = new JsonParagraph 
-                    { 
-                        Content = new List<object> { new JsonRun { Text = jsonCell.Content } } 
+                    if (payload.Content.Count > 0)
+                    {
+                        InjectTextToParagraphSafe(firstParagraph, payload);
+                    }
+                }
+                else if (hasPlainContent)
+                {
+                    var tempJsonPara = new JsonParagraph
+                    {
+                        Content = new List<object> { new JsonRun { Text = jsonCell.Content } }
                     };
-                    
+
                     InjectTextToParagraphSafe(firstParagraph, tempJsonPara);
                 }
             }
@@ -997,9 +1029,10 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                     jsonCell.Alignment = isDocumentRtl ? "right" : "left";
                 }
 
-                int paragraphIndex = 0;
-                foreach (var para in cell.Elements<Wp.Paragraph>())
+                var paragraphs = cell.Elements<Wp.Paragraph>().ToList();
+                for (int paragraphIndex = 0; paragraphIndex < paragraphs.Count; paragraphIndex++)
                 {
+                    var para = paragraphs[paragraphIndex];
                     string paragraphKey = string.IsNullOrEmpty(structureKey)
                         ? null
                         : $"{structureKey}.r{rowIndex}c{cellIndex}p{paragraphIndex}";
@@ -1011,7 +1044,10 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                         var checkboxes = parsedPara.Content.OfType<JsonCheckbox>();
                         if (checkboxes != null) jsonCell.Checkboxes.AddRange(checkboxes);
                     }
-                    paragraphIndex++;
+                    if (paragraphIndex < paragraphs.Count - 1 && jsonCell.FormattedRuns.Count > 0)
+                    {
+                        jsonCell.FormattedRuns.Add(new JsonRun { Text = "\n" });
+                    }
                 }
                 jsonCell.Content = string.Join("", jsonCell.FormattedRuns.Where(r => r != null).Select(r => r.Text ?? ""));
                 var cellProps = cell.TableCellProperties;
