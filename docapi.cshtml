@@ -418,12 +418,6 @@ private static void InjectTextToParagraphSafe(Wp.Paragraph para, JsonParagraph j
 {
     if (para == null || jsonPara == null) return;
 
-    string jsonText = string.Join("", jsonPara.Content.Select(c => Newtonsoft.Json.Linq.JObject.FromObject(c)?["Text"]?.ToString() ?? ""));
-    if (jsonText == para.InnerText)
-    {
-        return;
-    }
-
     try
     {
         var pPr = para.ParagraphProperties;
@@ -433,7 +427,7 @@ private static void InjectTextToParagraphSafe(Wp.Paragraph para, JsonParagraph j
             para.PrependChild(pPr);
         }
 
-        if (jsonPara.Formatting.TryGetValue("Direction", out object dirValue) && dirValue.ToString() == "RTL")
+        if (jsonPara.Formatting.TryGetValue("Direction", out object dirValue) && dirValue?.ToString() == "RTL")
         {
             if (pPr.BiDi == null) pPr.Append(new Wp.BiDi());
         }
@@ -450,32 +444,191 @@ private static void InjectTextToParagraphSafe(Wp.Paragraph para, JsonParagraph j
                 alignment = new Wp.Justification();
                 pPr.Append(alignment);
             }
-            Enum.TryParse(alignValue.ToString(), true, out Wp.JustificationValues justificationValue);
-            alignment.Val = justificationValue;
+            if (Enum.TryParse(alignValue.ToString(), true, out Wp.JustificationValues justificationValue))
+            {
+                alignment.Val = justificationValue;
+            }
         }
 
-        if (jsonPara.Content != null && jsonPara.Content.Any())
+        if (jsonPara.Content == null || !jsonPara.Content.Any())
         {
-            string newText = System.Web.HttpUtility.HtmlDecode(jsonText);
-            if (newText == null) return;
+            return;
+        }
 
-            para.RemoveAllChildren<Wp.Run>();
+        var extractedRuns = new List<JsonRun>();
+        foreach (var contentItem in jsonPara.Content)
+        {
+            if (contentItem == null) continue;
 
-            var newRun = new Wp.Run();
-            
-            if (pPr.GetFirstChild<Wp.RunProperties>() != null)
+            if (contentItem is JsonRun directRun)
             {
-                newRun.PrependChild(pPr.GetFirstChild<Wp.RunProperties>().CloneNode(true));
+                extractedRuns.Add(directRun);
+                continue;
             }
 
-            var text = new Wp.Text(newText) { Space = SpaceProcessingModeValues.Preserve };
-            newRun.Append(text);
-            para.AppendChild(newRun);
+            try
+            {
+                var token = contentItem as Newtonsoft.Json.Linq.JToken ?? Newtonsoft.Json.Linq.JToken.FromObject(contentItem);
+                if (token == null) continue;
+
+                if (token["Type"] != null && token["Type"].ToString() == "Checkbox")
+                {
+                    // Skip checkbox placeholder replacement; keep original checkbox element intact.
+                    continue;
+                }
+
+                var parsedRun = token.ToObject<JsonRun>();
+                if (parsedRun != null)
+                {
+                    extractedRuns.Add(parsedRun);
+                }
+            }
+            catch
+            {
+                // Ignore malformed content entries to avoid breaking document generation.
+            }
+        }
+
+        if (!extractedRuns.Any())
+        {
+            string fallbackText = string.Join("", jsonPara.Content.Select(c =>
+            {
+                try
+                {
+                    var token = c as Newtonsoft.Json.Linq.JToken ?? Newtonsoft.Json.Linq.JToken.FromObject(c);
+                    return token?["Text"]?.ToString() ?? string.Empty;
+                }
+                catch
+                {
+                    return string.Empty;
+                }
+            }));
+
+            fallbackText = System.Web.HttpUtility.HtmlDecode(fallbackText ?? string.Empty);
+            if (string.IsNullOrEmpty(fallbackText)) return;
+
+            para.RemoveAllChildren<Wp.Run>();
+            var fallbackRun = new Wp.Run();
+            var text = new Wp.Text(fallbackText) { Space = SpaceProcessingModeValues.Preserve };
+            fallbackRun.Append(text);
+            para.AppendChild(fallbackRun);
+            return;
+        }
+
+        var combinedText = string.Concat(extractedRuns.Select(r => r?.Text ?? string.Empty));
+        if (combinedText == para.InnerText)
+        {
+            return;
+        }
+
+        para.RemoveAllChildren<Wp.Run>();
+
+        foreach (var runData in extractedRuns)
+        {
+            if (runData == null) continue;
+
+            string decodedText = System.Web.HttpUtility.HtmlDecode(runData.Text ?? string.Empty) ?? string.Empty;
+
+            var run = new Wp.Run();
+            var runProperties = BuildRunProperties(runData);
+            if (runProperties != null && runProperties.HasChildren)
+            {
+                run.PrependChild(runProperties);
+            }
+
+            var normalizedText = decodedText.Replace("\r\n", "\n");
+            var parts = normalizedText.Split(new[] { "\n" }, StringSplitOptions.None);
+            for (int i = 0; i < parts.Length; i++)
+            {
+                run.AppendChild(new Wp.Text(parts[i]) { Space = SpaceProcessingModeValues.Preserve });
+                if (i < parts.Length - 1)
+                {
+                    run.AppendChild(new Wp.Break());
+                }
+            }
+
+            para.AppendChild(run);
         }
     }
     catch (Exception)
     {
     }
+}
+
+private static Wp.RunProperties BuildRunProperties(JsonRun runData)
+{
+    if (runData == null) return null;
+
+    var runProperties = new Wp.RunProperties();
+
+    if (runData.Formatting != null)
+    {
+        if (TryGetBoolean(runData.Formatting, "Bold"))
+        {
+            runProperties.AppendChild(new Wp.Bold());
+        }
+        if (TryGetBoolean(runData.Formatting, "Italic"))
+        {
+            runProperties.AppendChild(new Wp.Italic());
+        }
+        if (TryGetBoolean(runData.Formatting, "Underline"))
+        {
+            var underline = new Wp.Underline();
+            if (runData.FormattingValues != null && runData.FormattingValues.TryGetValue("UnderlineStyle", out string underlineStyle) &&
+                Enum.TryParse(underlineStyle, true, out Wp.UnderlineValues underlineValue))
+            {
+                underline.Val = underlineValue;
+            }
+            else
+            {
+                underline.Val = Wp.UnderlineValues.Single;
+            }
+            runProperties.AppendChild(underline);
+        }
+    }
+
+    if (runData.FormattingValues != null)
+    {
+        if (runData.FormattingValues.TryGetValue("ColorValue", out string colorValue) && !string.IsNullOrWhiteSpace(colorValue))
+        {
+            runProperties.AppendChild(new Wp.Color { Val = colorValue });
+        }
+        if (runData.FormattingValues.TryGetValue("HighlightValue", out string highlightValue) && !string.IsNullOrWhiteSpace(highlightValue))
+        {
+            if (Enum.TryParse(highlightValue, true, out Wp.HighlightColorValues highlightEnum))
+            {
+                runProperties.AppendChild(new Wp.Highlight { Val = highlightEnum });
+            }
+            else
+            {
+                runProperties.AppendChild(new Wp.Highlight { Val = Wp.HighlightColorValues.Yellow });
+            }
+        }
+        if (runData.FormattingValues.TryGetValue("ShadingValue", out string shadingValue) && !string.IsNullOrWhiteSpace(shadingValue))
+        {
+            runProperties.AppendChild(new Wp.Shading { Fill = shadingValue, Val = Wp.ShadingPatternValues.Clear });
+        }
+        if (runData.FormattingValues.TryGetValue("FontSize", out string fontSize) && !string.IsNullOrWhiteSpace(fontSize))
+        {
+            runProperties.AppendChild(new Wp.FontSize { Val = fontSize });
+        }
+        if (runData.FormattingValues.TryGetValue("FontFamily", out string fontFamily) && !string.IsNullOrWhiteSpace(fontFamily))
+        {
+            runProperties.AppendChild(new Wp.RunFonts { Ascii = fontFamily, HighAnsi = fontFamily, ComplexScript = fontFamily });
+        }
+    }
+
+    return runProperties;
+}
+
+private static bool TryGetBoolean(Dictionary<string, bool> dictionary, string key)
+{
+    if (dictionary == null) return false;
+    if (dictionary.TryGetValue(key, out bool value))
+    {
+        return value;
+    }
+    return false;
 }
 private static void InjectTextToTableSafe(Wp.Table table, JsonTable jsonTable)
 {
