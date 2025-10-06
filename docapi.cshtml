@@ -8,390 +8,945 @@
 @using Newtonsoft.Json
 @using DocumentFormat.OpenXml
 @using DocumentFormat.OpenXml.Packaging
-@using DocumentFormat.OpenXml.Wordprocessing
-@using DocumentFormat.OpenXml.Drawing
-@using Spire.Xls
-@using Spire.Doc
+@using Wp = DocumentFormat.OpenXml.Wordprocessing
+@using A = DocumentFormat.OpenXml.Drawing
 @using Mas.com.eg.Models
+@using Spire.Doc
 
 @functions {
-    public class DocumentConverter
+    public static Newtonsoft.Json.Linq.JObject ConvertElementToJson(OpenXmlElement element)
     {
-        public class JsonPayload
+        if (element == null) return null;
+        var jsonObj = new Newtonsoft.Json.Linq.JObject();
+        jsonObj["ElementType"] = element.GetType().Name;
+        var attributes = new Newtonsoft.Json.Linq.JObject();
+        foreach (var attr in element.GetAttributes())
         {
-            public string FileVersionPath { get; set; }
-            public List<JsonElement> Elements { get; set; }
+            attributes[attr.LocalName] = attr.Value;
         }
-
-        public class JsonElement
+        if (attributes.HasValues)
         {
-            public int ElementId { get; set; }
-            public string Type { get; set; }
-            public object Content { get; set; }
+            jsonObj["Attributes"] = attributes;
         }
-
-        public class JsonParagraph
+        if (!element.HasChildren && !string.IsNullOrEmpty(element.InnerText))
         {
-            public string Text { get; set; }
+            jsonObj["InnerText"] = element.InnerText;
         }
-
-        public class JsonTable
+        if (element.HasChildren)
         {
-            public List<List<JsonTableCell>> Rows { get; set; } = new List<List<JsonTableCell>>();
-        }
-
-        public class JsonTableCell
-        {
-            public List<JsonElement> Elements { get; set; } = new List<JsonElement>();
-        }
-
-        public class JsonImage
-        {
-            public string Base64 { get; set; }
-            public string ContentType { get; set; }
-        }
-
-        public class JsonCheckBox
-        {
-            public bool IsChecked { get; set; }
-            public string Text { get; set; }
-        }
-
-        public class FileResult
-        {
-            public bool Success { get; set; }
-            public string Message { get; set; }
-            public byte[] FileBytes { get; set; }
-        }
-
-        public static string FindLatestVersion(string filePath)
-        {
-            var directory = Path.GetDirectoryName(filePath);
-            var baseFileName = Path.GetFileNameWithoutExtension(filePath).Split(new[] { "-v(" }, StringSplitOptions.None)[0];
-            var extension = Path.GetExtension(filePath);
-
-            var regex = new Regex($@"^{Regex.Escape(baseFileName)}-v\((\d+)\){Regex.Escape(extension)}$", RegexOptions.IgnoreCase);
-
-            var latestVersion = -1;
-            var latestFile = filePath;
-            bool foundVersionedFile = false;
-
-            if (Directory.Exists(directory))
+            var childrenArray = new Newtonsoft.Json.Linq.JArray();
+            foreach (var child in element.ChildElements)
             {
-                foreach (var file in Directory.GetFiles(directory, $"{baseFileName}*{extension}"))
+                childrenArray.Add(ConvertElementToJson(child));
+            }
+            jsonObj["Children"] = childrenArray;
+        }
+        return jsonObj;
+    }
+
+    public class DocumentConverter
+{
+    public class NewDoc
+    {
+        public bool success { get; set; }
+        public string message { get; set; }
+        public byte[] fileBytes { get; set; }
+    }
+
+    public class JsonPayload
+    {
+        public string Direction { get; set; }
+        public List<object> Elements { get; set; }
+        public string FileVersionPath { get; set; }
+        public int Version { get; set; }
+    }
+
+    public class JsonParagraph { public int ID { get; set; } public string Type { get; set; } = "Paragraph"; public List<object> Content { get; set; } = new List<object>(); public Dictionary<string, object> Formatting { get; set; } = new Dictionary<string, object>(); }
+    public class JsonRun { public string Text { get; set; } public Dictionary<string, bool> Formatting { get; set; } = new Dictionary<string, bool>(); public Dictionary<string, string> FormattingValues { get; set; } = new Dictionary<string, string>(); }
+    public class JsonCheckbox { public string Type { get; set; } = "Checkbox"; public bool IsChecked { get; set; } public string Content { get; set; } }
+    public class JsonTable { public int ID { get; set; } public string Type { get; set; } = "Table"; public List<JsonTableRow> Content { get; set; } = new List<JsonTableRow>(); public Dictionary<string, string> Borders { get; set; } = new Dictionary<string, string>(); }
+    public class JsonTableRow { public List<JsonTableCell> Cells { get; set; } = new List<JsonTableCell>(); public Dictionary<string, string> Borders { get; set; } = new Dictionary<string, string>(); }
+    public class JsonTableCell { public string Content { get; set; } public int GridSpan { get; set; } = 1; public string VerticalMerge { get; set; } public List<JsonRun> FormattedRuns { get; set; } = new List<JsonRun>(); public List<JsonCheckbox> Checkboxes { get; set; } = new List<JsonCheckbox>(); public Dictionary<string, string> Borders { get; set; } = new Dictionary<string, string>(); public int? rowSpan { get; set; } public string Direction { get; set; } public string Alignment { get; set; } public string TextRotation { get; set; }}
+    public class JsonImage { public int ID { get; set; } public string Type { get; set; } = "Image"; public string Content { get; set; } }
+public static readonly Regex VersionPattern = new Regex(@"^(.+?)(?:\s*\(Rev\s?(\d+)\))?$", RegexOptions.IgnoreCase);
+          public static string GetVersionedPath(string basePath, int? version)
+        {
+            var directory = Path.GetDirectoryName(basePath);
+            var baseFileNameWithoutExt = Path.GetFileNameWithoutExtension(basePath);
+            var extension = Path.GetExtension(basePath);
+
+            // If a specific version is requested, build the path for it.
+            if (version.HasValue)
+            {
+                if (version.Value == 0) return basePath; // Version 0 is the base file itself.
+                string specificPath = Path.Combine(directory, $"{baseFileNameWithoutExt}_v({version.Value}){extension}");
+                return File.Exists(specificPath) ? specificPath : basePath; // Fallback to base if not found
+            }
+
+            // If no version is specified, find the latest version.
+            if (!Directory.Exists(directory)) return basePath;
+
+            var files = Directory.GetFiles(directory, $"{baseFileNameWithoutExt}*{extension}");
+            int latestVersion = -1;
+            string latestFile = basePath;
+
+            foreach (var file in files)
+            {
+                var currentFileName = Path.GetFileNameWithoutExtension(file);
+                var match = VersionPattern.Match(currentFileName);
+
+                if (match.Success && match.Groups[1].Value.Equals(baseFileNameWithoutExt, StringComparison.OrdinalIgnoreCase))
                 {
-                    var match = regex.Match(Path.GetFileName(file));
-                    if (match.Success)
+                    int currentVersion = 0; // Default to 0 for the base file
+                    if (match.Groups[2].Success && int.TryParse(match.Groups[2].Value, out int parsedVersion))
                     {
-                        foundVersionedFile = true;
-                        var version = int.Parse(match.Groups[1].Value);
-                        if (version > latestVersion)
-                        {
-                            latestVersion = version;
-                            latestFile = file;
-                        }
+                        currentVersion = parsedVersion;
+                    }
+
+                    if (currentVersion > latestVersion)
+                    {
+                        latestVersion = currentVersion;
+                        latestFile = file;
+                    }
+                    // Handle the base file itself if it's the only one
+                    else if (latestVersion == -1 && currentVersion == 0)
+                    {
+                        latestVersion = 0;
+                        latestFile = file;
                     }
                 }
             }
-
-            if (!foundVersionedFile && System.IO.File.Exists(filePath)) { return filePath; }
-            if (!System.IO.File.Exists(latestFile)) { return filePath; }
-
             return latestFile;
         }
 
-        private static JsonElement ParseOpenXmlElement(OpenXmlElement element, int id, MainDocumentPart mainPart)
-        {
-            var jsonElement = new JsonElement { ElementId = id };
+        // ** REVISED: Generates the next available version number for a new upload **
+       public static string GenerateNewVersionFileName(string originalPath)
+{
+    var directory = Path.GetDirectoryName(originalPath);
+    var fileNameWithoutExt = Path.GetFileNameWithoutExtension(originalPath);
+    var extension = Path.GetExtension(originalPath);
 
-            if (element is Paragraph para)
+    var match = VersionPattern.Match(fileNameWithoutExt);
+    string baseName = match.Success ? match.Groups[1].Value.Trim() : fileNameWithoutExt;
+
+    var files = Directory.GetFiles(directory, $"{baseName}*{extension}");
+    int maxVersion = 0;
+    foreach (var file in files)
+    {
+        var currentMatch = VersionPattern.Match(Path.GetFileNameWithoutExtension(file));
+        if (currentMatch.Success && currentMatch.Groups[1].Value.Trim().Equals(baseName, StringComparison.OrdinalIgnoreCase))
+        {
+            if (currentMatch.Groups[2].Success && int.TryParse(currentMatch.Groups[2].Value, out int currentVersion))
             {
-                var checkBox = para.Descendants<FormFieldData>().FirstOrDefault(f => f.GetFirstChild<CheckBox>() != null);
-                if (checkBox != null)
+                if (currentVersion > maxVersion)
                 {
-                    jsonElement.Type = "CheckBox";
-                    var checkboxElement = checkBox.GetFirstChild<CheckBox>();
-                    var checkedProp = checkboxElement.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.Checked>();
-                    jsonElement.Content = new JsonCheckBox
+                    maxVersion = currentVersion;
+                }
+            }
+        }
+    }
+
+    int nextVersion = maxVersion + 1;
+    // Format number with two digits (e.g., 4 becomes 04)
+    return Path.Combine(directory, $"{baseName} (Rev {nextVersion:D2}){extension}");
+}
+    public static string FindLatestVersion(string filePath)
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(filePath);
+            var fileName = Path.GetFileName(filePath);
+            var extension = Path.GetExtension(filePath);
+
+            if (!Directory.Exists(directory) || !File.Exists(filePath))
+                return filePath;
+
+            var baseFileNameWithoutExt = Path.GetFileNameWithoutExtension(filePath);
+            var files = Directory.GetFiles(directory, $"*{extension}");
+
+            var versionPattern = new Regex(@"^(.+?)(?:_v\((\d+)\))?(?:_S\((\d+)\))?$", RegexOptions.IgnoreCase);
+            var baseMatch = versionPattern.Match(baseFileNameWithoutExt);
+
+            if (!baseMatch.Success) return filePath;
+
+            string baseCodeAndName = baseMatch.Groups[1].Value;
+            int latestVersion = -1;
+            string latestFile = filePath;
+
+            foreach (var file in files)
+            {
+                var currentFileName = Path.GetFileNameWithoutExtension(file);
+                var currentMatch = versionPattern.Match(currentFileName);
+
+                if (currentMatch.Success && currentMatch.Groups[1].Value.Equals(baseCodeAndName, StringComparison.OrdinalIgnoreCase))
+                {
+                    int currentVersion = 0;
+                    if (currentMatch.Groups[2].Success)
                     {
-                        IsChecked = checkedProp != null,
-                        Text = para.InnerText.Trim()
+                        int.TryParse(currentMatch.Groups[2].Value, out currentVersion);
+                    }
+
+                    if (currentVersion > latestVersion)
+                    {
+                        latestVersion = currentVersion;
+                        latestFile = file;
+                    }
+                }
+            }
+
+            return File.Exists(latestFile) ? latestFile : filePath;
+        }
+        catch
+        {
+            return filePath;
+        }
+    }
+public static NewDoc ConvertJsonToDocx(string jsonInput, string appPath, string recordID)
+{
+    try
+    {
+        JsonPayload payload = JsonConvert.DeserializeObject<JsonPayload>(jsonInput);
+        if (payload == null || string.IsNullOrEmpty(payload.FileVersionPath))
+        {
+            return new NewDoc { success = false, message = "File version path was not found in the JSON payload." };
+        }
+
+        string templatePath = Path.Combine(appPath, payload.FileVersionPath.TrimStart('\\', '/').Replace('/', '\\'));
+        if (!File.Exists(templatePath))
+        {
+            return new NewDoc { success = false, message = $"Template file not found: {templatePath}" };
+        }
+
+        byte[] originalBytes = File.ReadAllBytes(templatePath);
+        using (MemoryStream memStream = new MemoryStream())
+        {
+            memStream.Write(originalBytes, 0, originalBytes.Length);
+            memStream.Position = 0;
+
+            using (WordprocessingDocument wordDoc = WordprocessingDocument.Open(memStream, true))
+            {
+                var body = wordDoc.MainDocumentPart.Document.Body;
+
+                var jsonElements = payload.Elements.GetEnumerator();
+                var docElements = body.Elements().ToList();
+                var docElementEnumerator = docElements.GetEnumerator();
+
+                while (jsonElements.MoveNext())
+                {
+                    var jObject = Newtonsoft.Json.Linq.JObject.FromObject(jsonElements.Current);
+                    string elementType = jObject["Type"]?.ToString();
+
+                    while (docElementEnumerator.MoveNext())
+                    {
+                        var docElement = docElementEnumerator.Current;
+
+                        if (elementType == "Paragraph" && docElement is Wp.Paragraph)
+                        {
+                            var jsonPara = jObject.ToObject<JsonParagraph>();
+                            InjectTextToParagraphSafe((Wp.Paragraph)docElement, jsonPara);
+                            break; 
+                        }
+                        else if (elementType == "Table" && docElement is Wp.Table)
+                        {
+                            var jsonTable = jObject.ToObject<JsonTable>();
+                            InjectTextToTableSafe((Wp.Table)docElement, jsonTable);
+                            break;
+                        }
+                        else if (docElement is Wp.SdtBlock sdtBlock)
+                        {
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(recordID))
+                {
+                    AddFooter(body, recordID);
+                }
+
+                wordDoc.Save();
+            }
+
+            return new NewDoc { success = true, fileBytes = memStream.ToArray() };
+        }
+    }
+    catch (Exception ex)
+    {
+        return new NewDoc { success = false, message = $"Error processing file: {ex.Message}" };
+    }
+}
+    public static string GenerateNewVersionFileName(string originalPath, int? serialNumber = null)
+    {
+        var directory = Path.GetDirectoryName(originalPath);
+        var fileName = Path.GetFileNameWithoutExtension(originalPath);
+        var extension = Path.GetExtension(originalPath);
+
+        var versionPattern = new Regex(@"^(.+?)(?:_v\((\d+)\))?(?:_S\((\d+)\))?$", RegexOptions.IgnoreCase);
+        var match = versionPattern.Match(fileName);
+
+        string baseCodeAndName = match.Success ? match.Groups[1].Value : fileName;
+
+        var files = Directory.GetFiles(directory, $"{baseCodeAndName}*{extension}");
+        int nextVersion = 1;
+
+        foreach (var file in files)
+        {
+            var currentFileName = Path.GetFileNameWithoutExtension(file);
+            var currentMatch = versionPattern.Match(currentFileName);
+
+            if (currentMatch.Success && currentMatch.Groups[1].Value.Equals(baseCodeAndName, StringComparison.OrdinalIgnoreCase))
+            {
+                if (currentMatch.Groups[2].Success)
+                {
+                    if (int.TryParse(currentMatch.Groups[2].Value, out int currentVersion))
+                    {
+                        nextVersion = Math.Max(nextVersion, currentVersion + 1);
+                    }
+                }
+            }
+        }
+
+        string newFileName = $"{baseCodeAndName}_v({nextVersion})";
+        if (serialNumber.HasValue)
+        {
+            newFileName += $"_S({serialNumber.Value})";
+        }
+
+        return Path.Combine(directory, newFileName + extension);
+    }
+public static object ConvertDocxToJson(string filePath, int? version)
+{
+    try
+    {
+        string pathToRead = GetVersionedPath(filePath, version);
+        if (!File.Exists(pathToRead))
+        {
+            return new { success = false, message = $"Template file not found: {pathToRead}" };
+        }
+
+        var finalMatch = VersionPattern.Match(Path.GetFileNameWithoutExtension(pathToRead));
+        int finalVersion = 0;
+        if (finalMatch.Success && finalMatch.Groups[2].Success)
+        {
+            int.TryParse(finalMatch.Groups[2].Value, out finalVersion);
+        }
+
+        var documentElements = new List<object>();
+        string documentDirection = "LTR";
+        int elementIdCounter = 0;
+
+        using (WordprocessingDocument wordDoc = WordprocessingDocument.Open(pathToRead, false))
+        {
+            var body = wordDoc.MainDocumentPart.Document.Body;
+            documentDirection = GetDocumentDirection(wordDoc);
+            
+            // Call the new recursive parsing function starting from the body
+            ParseElementsRecursive(body.ChildElements, ref elementIdCounter, wordDoc.MainDocumentPart, documentElements);
+        }
+
+        string versionPathForClient = pathToRead.Replace(HttpRuntime.AppDomainAppPath, "").Replace('\\', '/');
+        return new { success = true, json = new JsonPayload { Elements = documentElements, Direction = documentDirection, FileVersionPath = versionPathForClient, Version = finalVersion } };
+    }
+    catch (Exception ex)
+    {
+        return new { success = false, message = $"Error reading file: {ex.Message}" };
+    }
+}
+
+// New helper function to parse elements recursively
+private static void ParseElementsRecursive(IEnumerable<OpenXmlElement> elements, ref int elementIdCounter, MainDocumentPart mainPart, List<object> documentElements)
+{
+    foreach (var element in elements)
+    {
+        elementIdCounter++;
+        if (element is Wp.Paragraph para)
+        {
+            documentElements.Add(ParseParagraph(para, elementIdCounter, mainPart));
+        }
+        else if (element is Wp.Table table)
+        {
+            documentElements.Add(ParseTable(table, elementIdCounter, mainPart));
+        }
+        else if (element is Wp.SdtBlock sdtBlock)
+        {
+            // If it's a Content Control block, parse the elements INSIDE it
+            var content = sdtBlock.SdtContentBlock;
+            if (content != null)
+            {
+                ParseElementsRecursive(content.ChildElements, ref elementIdCounter, mainPart, documentElements);
+            }
+        }
+        else if (element.Descendants<Wp.Drawing>().Any())
+        {
+            documentElements.AddRange(ParseImages(element, elementIdCounter, mainPart));
+        }
+        // Other elements are ignored to keep the JSON clean
+    }
+}
+
+
+
+
+    private static string FindOriginalFile(string versionedPath)
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(versionedPath);
+            var fileName = Path.GetFileNameWithoutExtension(versionedPath);
+            var extension = Path.GetExtension(versionedPath);
+
+            var versionPattern = new Regex(@"^(.+?)(?:_v\(\d+\))?(?:_S\(\d+\))?$");
+            var match = versionPattern.Match(fileName);
+
+            if (match.Success)
+            {
+                string baseName = match.Groups[1].Value;
+                string originalPath = Path.Combine(directory, baseName + extension);
+                if (File.Exists(originalPath))
+                {
+                    return originalPath;
+                }
+            }
+
+            return versionedPath;
+        }
+        catch
+        {
+            return versionedPath;
+        }
+    }
+private static void InjectTextToParagraphSafe(Wp.Paragraph para, JsonParagraph jsonPara)
+{
+    if (para == null || jsonPara == null) return;
+
+    string jsonText = string.Join("", jsonPara.Content.Select(c => Newtonsoft.Json.Linq.JObject.FromObject(c)?["Text"]?.ToString() ?? ""));
+    if (jsonText == para.InnerText)
+    {
+        return;
+    }
+
+    try
+    {
+        var pPr = para.ParagraphProperties;
+        if (pPr == null)
+        {
+            pPr = new Wp.ParagraphProperties();
+            para.PrependChild(pPr);
+        }
+
+        if (jsonPara.Formatting.TryGetValue("Direction", out object dirValue) && dirValue.ToString() == "RTL")
+        {
+            if (pPr.BiDi == null) pPr.Append(new Wp.BiDi());
+        }
+        else
+        {
+            pPr.BiDi?.Remove();
+        }
+
+        if (jsonPara.Formatting.TryGetValue("Alignment", out object alignValue))
+        {
+            var alignment = pPr.Justification;
+            if (alignment == null)
+            {
+                alignment = new Wp.Justification();
+                pPr.Append(alignment);
+            }
+            Enum.TryParse(alignValue.ToString(), true, out Wp.JustificationValues justificationValue);
+            alignment.Val = justificationValue;
+        }
+
+        if (jsonPara.Content != null && jsonPara.Content.Any())
+        {
+            string newText = System.Web.HttpUtility.HtmlDecode(jsonText);
+            if (newText == null) return;
+
+            para.RemoveAllChildren<Wp.Run>();
+
+            var newRun = new Wp.Run();
+            
+            if (pPr.GetFirstChild<Wp.RunProperties>() != null)
+            {
+                newRun.PrependChild(pPr.GetFirstChild<Wp.RunProperties>().CloneNode(true));
+            }
+
+            var text = new Wp.Text(newText) { Space = SpaceProcessingModeValues.Preserve };
+            newRun.Append(text);
+            para.AppendChild(newRun);
+        }
+    }
+    catch (Exception)
+    {
+    }
+}
+private static void InjectTextToTableSafe(Wp.Table table, JsonTable jsonTable)
+{
+    if (table == null || jsonTable?.Content == null) return;
+
+    try
+    {
+        var rows = table.Elements<Wp.TableRow>().ToList();
+        for (int rowIndex = 0; rowIndex < Math.Min(rows.Count, jsonTable.Content.Count); rowIndex++)
+        {
+            var docxRow = rows[rowIndex];
+            var jsonRow = jsonTable.Content[rowIndex];
+            var cells = docxRow.Elements<Wp.TableCell>().ToList();
+
+            for (int cellIndex = 0; cellIndex < Math.Min(cells.Count, jsonRow.Cells.Count); cellIndex++)
+            {
+                var docxCell = cells[cellIndex];
+                var jsonCell = jsonRow.Cells[cellIndex];
+
+                if (docxCell.TableCellProperties?.VerticalMerge?.Val?.Value == Wp.MergedCellValues.Continue)
+                {
+                    continue;
+                }
+
+                if (jsonCell.Content != null)
+                {
+                    var firstParagraph = docxCell.Elements<Wp.Paragraph>().FirstOrDefault();
+
+                    if (firstParagraph == null)
+                    {
+                        firstParagraph = new Wp.Paragraph();
+                        docxCell.Append(firstParagraph);
+                    }
+                    
+                    var paragraphsToRemove = docxCell.Elements<Wp.Paragraph>().Skip(1).ToList();
+                    foreach (var p in paragraphsToRemove)
+                    {
+                        p.Remove();
+                    }
+
+                    var tempJsonPara = new JsonParagraph 
+                    { 
+                        Content = new List<object> { new JsonRun { Text = jsonCell.Content } } 
                     };
+                    
+                    InjectTextToParagraphSafe(firstParagraph, tempJsonPara);
+                }
+            }
+        }
+    }
+    catch (Exception)
+    {
+    }
+}
+          
+          private static string GetParagraphAlignment(Wp.Paragraph para, MainDocumentPart mainPart)
+{
+    var pPr = para.ParagraphProperties;
+    
+    if (pPr?.Justification?.Val != null)
+    {
+        var alignment = pPr.Justification.Val.Value;
+        if (alignment == Wp.JustificationValues.Left)
+            return "left";
+        if (alignment == Wp.JustificationValues.Right)
+            return "right";
+        if (alignment == Wp.JustificationValues.Center)
+            return "center";
+        if (alignment == Wp.JustificationValues.Both || alignment == Wp.JustificationValues.Distribute)
+            return "justify";
+        if (alignment == Wp.JustificationValues.Start)
+            return pPr.BiDi != null ? "right" : "left";
+        if (alignment == Wp.JustificationValues.End)
+            return pPr.BiDi != null ? "left" : "right";
+        return alignment.ToString().ToLower();
+    }
+
+    var styleId = pPr?.ParagraphStyleId?.Val?.Value;
+    if (styleId != null)
+    {
+        var stylesPart = mainPart.StyleDefinitionsPart;
+        if (stylesPart != null)
+        {
+            var style = stylesPart.Styles.Elements<Wp.Style>().FirstOrDefault(s => s.StyleId == styleId);
+            if (style != null)
+            {
+                var styleJustification = style.StyleParagraphProperties?.Justification?.Val;
+                if (styleJustification != null)
+                {
+                    var alignment = styleJustification.Value;
+                    var styleBiDi = style.StyleParagraphProperties?.BiDi;
+                    var isRtl = styleBiDi != null || pPr?.BiDi != null;
+                    
+                    if (alignment == Wp.JustificationValues.Left)
+                        return "left";
+                    if (alignment == Wp.JustificationValues.Right)
+                        return "right";
+                    if (alignment == Wp.JustificationValues.Center)
+                        return "center";
+                    if (alignment == Wp.JustificationValues.Both || alignment == Wp.JustificationValues.Distribute)
+                        return "justify";
+                    if (alignment == Wp.JustificationValues.Start)
+                        return isRtl ? "right" : "left";
+                    if (alignment == Wp.JustificationValues.End)
+                        return isRtl ? "left" : "right";
+                    return alignment.ToString().ToLower();
+                }
+                
+                var baseStyleId = style.BasedOn?.Val?.Value;
+                if (baseStyleId != null)
+                {
+                    var baseStyle = stylesPart.Styles.Elements<Wp.Style>().FirstOrDefault(s => s.StyleId == baseStyleId);
+                    if (baseStyle?.StyleParagraphProperties?.Justification?.Val != null)
+                    {
+                        var baseAlignment = baseStyle.StyleParagraphProperties.Justification.Val.Value;
+                        var baseBiDi = baseStyle.StyleParagraphProperties?.BiDi;
+                        var isRtl = baseBiDi != null || pPr?.BiDi != null;
+                        
+                        if (baseAlignment == Wp.JustificationValues.Left)
+                            return "left";
+                        if (baseAlignment == Wp.JustificationValues.Right)
+                            return "right";
+                        if (baseAlignment == Wp.JustificationValues.Center)
+                            return "center";
+                        if (baseAlignment == Wp.JustificationValues.Both || baseAlignment == Wp.JustificationValues.Distribute)
+                            return "justify";
+                        if (baseAlignment == Wp.JustificationValues.Start)
+                            return isRtl ? "right" : "left";
+                        if (baseAlignment == Wp.JustificationValues.End)
+                            return isRtl ? "left" : "right";
+                        return baseAlignment.ToString().ToLower();
+                    }
+                }
+            }
+        }
+    }
+
+    var documentSettings = mainPart.DocumentSettingsPart?.Settings;
+    var isDocumentRtl = documentSettings?.GetFirstChild<Wp.BiDi>() != null;
+    var isParagraphRtl = pPr?.BiDi != null;
+    
+    if (isParagraphRtl || isDocumentRtl)
+    {
+        return "right";
+    }
+    
+    return "left";
+}
+private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, MainDocumentPart mainPart)
+{
+    var jsonPara = new JsonParagraph { ID = elementId };
+    var pPr = para.ParagraphProperties;
+    if (pPr != null)
+    {
+        // ... (Formatting logic remains the same)
+        jsonPara.Formatting["Alignment"] = GetParagraphAlignment(para, mainPart);
+        if (pPr.Shading?.Fill != null) jsonPara.Formatting["Shading"] = pPr.Shading.Fill.Value;
+        jsonPara.Formatting["Direction"] = pPr.BiDi != null ? "RTL" : "LTR";
+    }
+    var runs = para.Elements<Wp.Run>().ToList();
+    for (int i = 0; i < runs.Count; i++)
+    {
+        var run = runs[i];
+        var sdtRun = run.Descendants<Wp.SdtRun>().FirstOrDefault();
+        
+        // This part handles formal checkbox content controls
+        if (sdtRun?.SdtProperties?.GetFirstChild<Wp.CheckBox>() != null)
+        {
+            var checkedState = sdtRun.SdtProperties.GetFirstChild<Wp.CheckBox>().GetFirstChild<Wp.Checked>();
+            string labelText = sdtRun.GetFirstChild<Wp.SdtContentRun>()?.InnerText.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(labelText) && (i + 1) < runs.Count)
+            {
+                var nextRun = runs[i + 1];
+                if (string.IsNullOrEmpty(nextRun.GetFirstChild<Wp.SdtRun>()?.InnerText))
+                {
+                    labelText = nextRun.InnerText.Trim();
+                    if (!string.IsNullOrEmpty(labelText)) { i++; }
+                }
+            }
+            jsonPara.Content.Add(new JsonCheckbox { IsChecked = checkedState?.Val?.Value ?? false, Content = labelText });
+        }
+        // ***** THIS IS THE FIX *****
+        // Revert to InnerText to capture all text and symbols, not just <w:t> elements.
+        else if (!string.IsNullOrEmpty(run.InnerText))
+        {
+            var jsonRun = new JsonRun { Text = run.InnerText }; // Using InnerText from v1
+            var rPr = run.RunProperties;
+            if (rPr != null)
+            {
+                if (rPr.Bold != null) jsonRun.Formatting["Bold"] = true;
+                if (rPr.Italic != null) jsonRun.Formatting["Italic"] = true;
+                if (rPr.Underline != null) { jsonRun.Formatting["Underline"] = true;
+                if (rPr.Underline.Val != null) jsonRun.FormattingValues["UnderlineStyle"] = rPr.Underline.Val.Value.ToString(); }
+                if (rPr.Color?.Val != null) jsonRun.FormattingValues["ColorValue"] = rPr.Color.Val.Value;
+                if (rPr.Highlight?.Val != null) jsonRun.FormattingValues["HighlightValue"] = rPr.Highlight.Val.Value.ToString();
+                if (rPr.Shading?.Fill != null) jsonRun.FormattingValues["ShadingValue"] = rPr.Shading.Fill.Value;
+                if (rPr.FontSize?.Val != null) jsonRun.FormattingValues["FontSize"] = rPr.FontSize.Val.Value;
+                if (rPr.RunFonts?.Ascii != null) jsonRun.FormattingValues["FontFamily"] = rPr.RunFonts.Ascii.Value;
+            }
+            jsonPara.Content.Add(jsonRun);
+        }
+    }
+    if (para.Descendants<Wp.Drawing>().Any())
+    {
+        var images = ParseImages(para, elementId, mainPart);
+        if (images != null) { jsonPara.Content.AddRange(images); }
+    }
+    return jsonPara;
+}
+
+    private static JsonTable ParseTable(Wp.Table table, int elementId, MainDocumentPart mainPart)
+    {
+        var jsonTable = new JsonTable { ID = elementId };
+        var tblProps = table.GetFirstChild<Wp.TableProperties>();
+        if (tblProps != null)
+        {
+            var borders = tblProps.GetFirstChild<Wp.TableBorders>();
+            if (borders != null)
+            {
+                jsonTable.Borders["Top"] = GetBorderStyle(borders.TopBorder) ?? "inherit";
+                jsonTable.Borders["Bottom"] = GetBorderStyle(borders.BottomBorder) ?? "inherit";
+                jsonTable.Borders["Left"] = GetBorderStyle(borders.LeftBorder) ?? "inherit";
+                jsonTable.Borders["Right"] = GetBorderStyle(borders.RightBorder) ?? "inherit";
+                jsonTable.Borders["InsideH"] = GetBorderStyle(borders.InsideHorizontalBorder) ?? "inherit";
+                jsonTable.Borders["InsideV"] = GetBorderStyle(borders.InsideVerticalBorder) ?? "inherit";
+            }
+            jsonTable.Borders["Direction"] = tblProps.GetFirstChild<Wp.BiDiVisual>() != null ? "RTL" : "LTR";
+        }
+        var tableData = new List<JsonTableRow>();
+        foreach (var row in table.Elements<Wp.TableRow>())
+        {
+            var jsonRow = new JsonTableRow();
+            foreach (var cell in row.Elements<Wp.TableCell>())
+            {
+                var jsonCell = new JsonTableCell();
+                var firstPara = cell.Elements<Wp.Paragraph>().FirstOrDefault();
+                if (firstPara != null)
+                {
+                    jsonCell.Direction = firstPara.ParagraphProperties?.BiDi != null ? "RTL" : "LTR";
+                    jsonCell.Alignment = GetParagraphAlignment(firstPara, mainPart);
                 }
                 else
                 {
-                    jsonElement.Type = "Paragraph";
-                    jsonElement.Content = new JsonParagraph { Text = para.InnerText };
+                    var documentSettings = mainPart.DocumentSettingsPart?.Settings;
+                    var isDocumentRtl = documentSettings?.GetFirstChild<Wp.BiDi>() != null;
+                    jsonCell.Direction = isDocumentRtl ? "RTL" : "LTR";
+                    jsonCell.Alignment = isDocumentRtl ? "right" : "left";
                 }
-            }
-            else if (element is Table table)
-            {
-                jsonElement.Type = "Table";
-                var jsonTable = new JsonTable();
-                foreach (var row in table.Elements<TableRow>())
+                
+                foreach (var para in cell.Elements<Wp.Paragraph>())
                 {
-                    var jsonRow = new List<JsonTableCell>();
-                    foreach (var cell in row.Elements<TableCell>())
+                    var parsedPara = ParseParagraph(para, 0, mainPart);
+                    if (parsedPara?.Content != null)
                     {
-                        var jsonCell = new JsonTableCell();
-                        int nestedId = 0;
-                        foreach (var cellElement in cell.Elements())
-                        {
-                            nestedId++;
-                            var parsedChild = ParseOpenXmlElement(cellElement, nestedId, mainPart);
-                            if (parsedChild != null) { jsonCell.Elements.Add(parsedChild); }
-                        }
-                        jsonRow.Add(jsonCell);
+                        var runs = parsedPara.Content.OfType<JsonRun>();
+                        if (runs != null) jsonCell.FormattedRuns.AddRange(runs);
+                        var checkboxes = parsedPara.Content.OfType<JsonCheckbox>();
+                        if (checkboxes != null) jsonCell.Checkboxes.AddRange(checkboxes);
                     }
-                    jsonTable.Rows.Add(jsonRow);
                 }
-                jsonElement.Content = jsonTable;
-            }
-            else if (element.Descendants<Drawing>().Any())
-            {
-                var drawing = element.Descendants<Drawing>().FirstOrDefault();
-                var blip = drawing?.Descendants<DocumentFormat.OpenXml.Drawing.Blip>().FirstOrDefault();
-                if (blip != null && blip.Embed != null && mainPart.GetPartById(blip.Embed.Value) is ImagePart imagePart)
+                jsonCell.Content = string.Join("", jsonCell.FormattedRuns.Where(r => r != null).Select(r => r.Text ?? ""));
+                var cellProps = cell.TableCellProperties;
+                if (cellProps != null)
                 {
-                    using (var stream = imagePart.GetStream())
-                    using (var ms = new MemoryStream())
+                    if (cellProps.GridSpan?.Val != null) jsonCell.GridSpan = cellProps.GridSpan.Val.Value;
+                    if (cellProps.VerticalMerge != null) jsonCell.VerticalMerge = cellProps.VerticalMerge.Val?.Value == Wp.MergedCellValues.Restart ? "Restart" : "Continue";
+                    if (cellProps.TextDirection != null && cellProps.TextDirection.Val != null)
                     {
-                        stream.CopyTo(ms);
-                        jsonElement.Type = "Image";
-                        jsonElement.Content = new JsonImage
-                        {
-                            Base64 = Convert.ToBase64String(ms.ToArray()),
-                            ContentType = imagePart.ContentType
-                        };
+                        jsonCell.TextRotation = cellProps.TextDirection.Val.Value.ToString();
                     }
+
+                    var cellBorders = cellProps.TableCellBorders;
+                    jsonCell.Borders["Top"] = GetBorderStyle(cellBorders?.TopBorder) ?? "inherit";
+                    jsonCell.Borders["Bottom"] = GetBorderStyle(cellBorders?.BottomBorder) ?? "inherit";
+                    jsonCell.Borders["Left"] = GetBorderStyle(cellBorders?.LeftBorder) ?? "inherit";
+                    jsonCell.Borders["Right"] = GetBorderStyle(cellBorders?.RightBorder) ?? "inherit";
+                    jsonCell.Borders["Background"] = cellProps.Shading?.Fill ?? "inherit";
                 }
+                jsonRow.Cells.Add(jsonCell);
             }
-
-            return jsonElement.Type != null ? jsonElement : null;
+            tableData.Add(jsonRow);
         }
+        jsonTable.Content = tableData;
+        CalculateRowSpans(jsonTable);
+        return jsonTable;
+    }
 
-        public static JsonPayload ConvertDocxToJson(string filePath)
+    private static void CalculateRowSpans(JsonTable jsonTable)
+    {
+        for (int rowIndex = 0; rowIndex < jsonTable.Content.Count; rowIndex++)
         {
-            var documentElements = new List<JsonElement>();
-            int elementId = 0;
-            using (WordprocessingDocument wordDoc = WordprocessingDocument.Open(filePath, false))
+            var row = jsonTable.Content[rowIndex];
+            for (int colIndex = 0; colIndex < row.Cells.Count; colIndex++)
             {
-                var body = wordDoc.MainDocumentPart.Document.Body;
-                foreach (var element in body.Elements())
+                var cell = row.Cells[colIndex];
+                if (cell.VerticalMerge == "Restart")
                 {
-                    elementId++;
-                    var parsedElement = ParseOpenXmlElement(element, elementId, wordDoc.MainDocumentPart);
-                    if (parsedElement != null)
+                    int rowspan = 1;
+                    for (int nextRow = rowIndex + 1; nextRow < jsonTable.Content.Count; nextRow++)
                     {
-                        documentElements.Add(parsedElement);
+                        if (colIndex < jsonTable.Content[nextRow].Cells.Count && jsonTable.Content[nextRow].Cells[colIndex].VerticalMerge == "Continue") { rowspan++; } else { break; }
                     }
+                    cell.rowSpan = rowspan;
                 }
             }
-            return new JsonPayload { Elements = documentElements, FileVersionPath = filePath.Replace(HttpRuntime.AppDomainAppPath, "") };
-        }
-
-        private static void UpdateElements(List<OpenXmlElement> docElements, List<JsonElement> savedElements)
-        {
-            foreach (var savedEl in savedElements)
-            {
-                if (savedEl.ElementId > 0 && savedEl.ElementId <= docElements.Count)
-                {
-                    var docEl = docElements[savedEl.ElementId - 1];
-
-                    if (savedEl.Type == "Paragraph" && docEl is Paragraph docPara)
-                    {
-                        var savedPara = JsonConvert.DeserializeObject<JsonParagraph>(savedEl.Content.ToString());
-                        if (docPara.InnerText.Trim() != savedPara.Text.Trim())
-                        {
-                            var firstRun = docPara.Elements<Run>().FirstOrDefault();
-                            var runProps = firstRun?.RunProperties?.CloneNode(true);
-                            docPara.RemoveAllChildren<Run>();
-                            var newRun = new Run();
-                            if (runProps != null) { newRun.Append(runProps); }
-                            newRun.Append(new Text(savedPara.Text) { Space = SpaceProcessingModeValues.Preserve });
-                            docPara.Append(newRun);
-                        }
-                    }
-                    else if (savedEl.Type == "CheckBox" && docEl is Paragraph paraWithCheckbox)
-                    {
-                        var checkBoxData = paraWithCheckbox.Descendants<FormFieldData>().FirstOrDefault(f => f.GetFirstChild<CheckBox>() != null);
-                        if (checkBoxData != null)
-                        {
-                            var savedCheck = JsonConvert.DeserializeObject<JsonCheckBox>(savedEl.Content.ToString());
-                            var checkboxElement = checkBoxData.GetFirstChild<CheckBox>();
-                            var checkedProp = checkboxElement.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.Checked>();
-
-                            if (savedCheck.IsChecked && checkedProp == null)
-                            {
-                                checkboxElement.Append(new DocumentFormat.OpenXml.Wordprocessing.Checked());
-                            }
-                            else if (!savedCheck.IsChecked && checkedProp != null)
-                            {
-                                checkedProp.Remove();
-                            }
-                        }
-                    }
-                    else if (savedEl.Type == "Table" && docEl is Table docTable)
-                    {
-                        var savedTable = JsonConvert.DeserializeObject<JsonTable>(savedEl.Content.ToString());
-                        var docRows = docTable.Elements<TableRow>().ToList();
-                        for (int i = 0; i < savedTable.Rows.Count && i < docRows.Count; i++)
-                        {
-                            var savedRow = savedTable.Rows[i];
-                            var docRow = docRows[i];
-                            var docCells = docRow.Elements<TableCell>().ToList();
-                            for (int j = 0; j < savedRow.Count && j < docCells.Count; j++)
-                            {
-                                UpdateElements(docCells[j].Elements<OpenXmlElement>().ToList(), savedRow[j].Elements);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        public static FileResult ConvertJsonToDocx(string jsonInput, string appPath, string recordID)
-        {
-            var payload = JsonConvert.DeserializeObject<JsonPayload>(jsonInput);
-            var templatePath = payload.FileVersionPath;
-            if (!Path.IsPathRooted(templatePath))
-            {
-                templatePath = Path.Combine(appPath, templatePath);
-            }
-
-            if (!System.IO.File.Exists(templatePath)) { throw new FileNotFoundException("The template version specified in the JSON was not found.", templatePath); }
-
-            byte[] templateBytes = System.IO.File.ReadAllBytes(templatePath);
-
-            using (MemoryStream memStream = new MemoryStream())
-            {
-                memStream.Write(templateBytes, 0, templateBytes.Length);
-                using (WordprocessingDocument wordDoc = WordprocessingDocument.Open(memStream, true))
-                {
-                    var body = wordDoc.MainDocumentPart.Document.Body;
-                    UpdateElements(body.Elements<OpenXmlElement>().ToList(), payload.Elements);
-
-                    if (!string.IsNullOrEmpty(recordID) && invoice.IsValidUniqueId(recordID))
-                    {
-                        AddFooter(body, recordID);
-                    }
-
-                    wordDoc.MainDocumentPart.Document.Save();
-                }
-                return new FileResult { Success = true, FileBytes = memStream.ToArray() };
-            }
-        }
-
-        public static object ConvertXlsxToJson(string filePath)
-        {
-            Workbook workbook = new Workbook();
-            workbook.LoadFromFile(filePath);
-            Worksheet sheet = workbook.Worksheets[0];
-            var table = new List<Dictionary<string, object>>();
-            var headers = new List<string>();
-            for (int c = 1; c <= sheet.LastColumn; c++)
-            {
-                headers.Add(sheet.Range[1, c].Value2?.ToString() ?? $"Column{c}");
-            }
-
-            for (int r = 2; r <= sheet.LastRow; r++)
-            {
-                var row = new Dictionary<string, object>();
-                for (int c = 1; c <= headers.Count; c++)
-                {
-                    row[headers[c - 1]] = sheet.Range[r, c].Value2;
-                }
-                table.Add(row);
-            }
-            return new JsonPayload { Elements = new List<JsonElement> { new JsonElement { Content = table } }, FileVersionPath = filePath.Replace(HttpRuntime.AppDomainAppPath, "") };
-        }
-
-        public static FileResult ConvertJsonToXlsx(string jsonInput, string appPath)
-        {
-            var payload = JsonConvert.DeserializeObject<JsonPayload>(jsonInput);
-            var templatePath = payload.FileVersionPath;
-            if (!Path.IsPathRooted(templatePath))
-            {
-                templatePath = Path.Combine(appPath, templatePath);
-            }
-
-            Workbook workbook = new Workbook();
-            if (System.IO.File.Exists(templatePath)) { workbook.LoadFromFile(templatePath); }
-            else { workbook.Worksheets.Add("Sheet1"); }
-
-            Worksheet sheet = workbook.Worksheets[0];
-            var firstElementContent = payload.Elements.FirstOrDefault()?.Content;
-            var tableData = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(firstElementContent.ToString());
-
-            if (tableData != null && tableData.Any())
-            {
-                var headers = tableData.First().Keys.ToList();
-                for (int c = 0; c < headers.Count; c++) { sheet.Range[1, c + 1].Value = headers[c]; }
-
-                for (int r = 0; r < tableData.Count; r++)
-                {
-                    for (int c = 0; c < headers.Count; c++)
-                    {
-                        sheet.Range[r + 2, c + 1].Value = tableData[r][headers[c]]?.ToString();
-                    }
-                }
-            }
-
-            using (MemoryStream ms = new MemoryStream())
-            {
-                workbook.SaveToStream(ms, Spire.Xls.FileFormat.Version2016);
-                return new FileResult { Success = true, FileBytes = ms.ToArray() };
-            }
-        }
-
-        private static void AddFooter(Body body, string recordID)
-        {
-            DataTable dtRecord = DBHelper.gettabel("select Document_number, Document_date, Email, begin_date from DC_Documents_records_single_id('" + recordID.Replace("'", "''") + "')");
-            if (dtRecord.Rows.Count > 0)
-            {
-                string documentNumber = dtRecord.Rows[0]["Document_number"].ToString();
-                DateTime createdTime = Convert.ToDateTime(dtRecord.Rows[0]["begin_date"]);
-                string userCreated = dtRecord.Rows[0]["Email"].ToString();
-                string userPrinted = DBHelper.UserEmail("");
-                DateTime printTime = DateTime.Now;
-
-                body.Append(new Paragraph());
-                body.Append(CreateFooterTable(documentNumber, createdTime, userCreated, userPrinted, printTime));
-            }
-        }
-
-        private static Table CreateFooterTable(string docNum, DateTime createdTime, string userCreated, string userPrinted, DateTime printTime)
-        {
-            Table table = new Table();
-            TableProperties props = new TableProperties(new TableWidth() { Width = "5000", Type = TableWidthUnitValues.Pct });
-            table.AppendChild(props);
-            TableRow row = new TableRow();
-            row.Append(
-                CreateTableCell($"Doc Num:({docNum})"),
-                CreateTableCell($"Created: {createdTime:yyyy-MM-dd hh:mm tt}"),
-                CreateTableCell($"By: {userCreated}"),
-                CreateTableCell($"Printed By: {userPrinted}"),
-                CreateTableCell($"Print Time: {printTime:yyyy-MM-dd hh:mm tt}")
-            );
-            table.Append(row);
-            return table;
-        }
-
-        private static TableCell CreateTableCell(string text)
-        {
-            return new TableCell(new Paragraph(new Run(new Text(text) { Space = SpaceProcessingModeValues.Preserve })));
         }
     }
+
+
+
+    private static string GetDocumentDirection(WordprocessingDocument wordDoc)
+    {
+        try
+        {
+            var documentSettings = wordDoc.MainDocumentPart.DocumentSettingsPart?.Settings;
+            if (documentSettings?.GetFirstChild<Wp.BiDi>() != null)
+            {
+                return "RTL";
+            }
+
+            var body = wordDoc.MainDocumentPart.Document.Body;
+            var firstPara = body.Elements<Wp.Paragraph>().FirstOrDefault();
+            if (firstPara?.ParagraphProperties?.BiDi != null)
+            {
+                return "RTL";
+            }
+
+            return "LTR";
+        }
+        catch
+        {
+            return "LTR";
+        }
+    }
+
+    private static string GetBorderStyle(OpenXmlElement border)
+    {
+        try
+        {
+            if (border == null) return null;
+
+            var valAttribute = border.GetAttributes().FirstOrDefault(a => a.LocalName == "val");
+            if (valAttribute != null && valAttribute.Value != "none" && valAttribute.Value != "nil")
+            {
+                return valAttribute.Value;
+            }
+
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static List<JsonImage> ParseImages(OpenXmlElement element, int elementId, MainDocumentPart mainPart)
+    {
+        var images = new List<JsonImage>();
+        try
+        {
+            var drawings = element.Descendants<Wp.Drawing>();
+            foreach (var drawing in drawings)
+            {
+                var blip = drawing.Descendants<A.Blip>().FirstOrDefault();
+                if (blip?.Embed?.Value != null)
+                {
+                    var imagePart = mainPart.GetPartById(blip.Embed.Value);
+                    if (imagePart != null)
+                    {
+                        using (var stream = imagePart.GetStream())
+                        {
+                            var imageBytes = new byte[stream.Length];
+                            stream.Read(imageBytes, 0, imageBytes.Length);
+                            string base64String = Convert.ToBase64String(imageBytes);
+                            images.Add(new JsonImage { ID = elementId, Content = base64String });
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+        }
+        return images;
+    }
+
+    private static void AddFooter(Wp.Body body, string recordID)
+    {
+        DataTable dtRecord = DBHelper.gettabel("select Document_number, Document_date, Email, begin_date from DC_Documents_records_single_id('" + recordID.Replace("'", "''") + "')");
+        if (dtRecord.Rows.Count > 0)
+        {
+            string documentNumber = dtRecord.Rows[0]["Document_number"].ToString();
+            DateTime createdTime = Convert.ToDateTime(dtRecord.Rows[0]["begin_date"]);
+            string userCreated = dtRecord.Rows[0]["Email"].ToString();
+            string userPrinted = DBHelper.UserEmail("");
+            DateTime printTime = DateTime.Now;
+            body.Append(new Wp.Paragraph());
+            body.Append(CreateFooterTable(documentNumber, createdTime, userCreated, userPrinted, printTime));
+        }
+    }
+
+    private static Wp.Table CreateFooterTable(string docNum, DateTime createdTime, string userCreated, string userPrinted, DateTime printTime)
+    {
+        Wp.Table table = new Wp.Table();
+        Wp.TableProperties props = new Wp.TableProperties(
+            new Wp.TableWidth() { Width = "5000", Type = Wp.TableWidthUnitValues.Pct },
+            new Wp.TableBorders(new Wp.TopBorder { Val = new EnumValue<Wp.BorderValues>(Wp.BorderValues.None) }, new Wp.BottomBorder { Val = new EnumValue<Wp.BorderValues>(Wp.BorderValues.None) }, new Wp.LeftBorder { Val = new EnumValue<Wp.BorderValues>(Wp.BorderValues.None) }, new Wp.RightBorder { Val = new EnumValue<Wp.BorderValues>(Wp.BorderValues.None) }, new Wp.InsideHorizontalBorder { Val = new EnumValue<Wp.BorderValues>(Wp.BorderValues.None) }, new Wp.InsideVerticalBorder { Val = new EnumValue<Wp.BorderValues>(Wp.BorderValues.None) })
+        );
+        table.AppendChild(props);
+        Wp.TableRow row = new Wp.TableRow();
+        row.Append(CreateTableCell($"Doc Num:({docNum})"), CreateTableCell($"Created: {createdTime:yyyy-MM-dd hh:mm tt}"), CreateTableCell($"By: {userCreated}"), CreateTableCell($"Printed By: {userPrinted}"), CreateTableCell($"Print Time: {printTime:yyyy-MM-dd hh:mm tt}"));
+        table.Append(row);
+        return table;
+    }
+
+    private static Wp.TableCell CreateTableCell(string text)
+    {
+        return new Wp.TableCell(new Wp.Paragraph(new Wp.Run(new Wp.Text(text) { Space = SpaceProcessingModeValues.Preserve })));
+    }
+
+    public static byte[] ConvertDocxToPdf(byte[] docxBytes)
+    {
+        if (docxBytes == null || docxBytes.Length == 0) throw new ArgumentException("Input byte array is null or empty.");
+        using (MemoryStream docxStream = new MemoryStream(docxBytes))
+        {
+            var document = new Document(docxStream, FileFormat.Docx);
+            using (MemoryStream pdfStream = new MemoryStream())
+            {
+                document.SaveToStream(pdfStream, FileFormat.PDF);
+                return pdfStream.ToArray();
+            }
+        }
+    }
+
+    public static byte[] ConvertDocxToHtml(byte[] docxBytes)
+    {
+        if (docxBytes == null || docxBytes.Length == 0) throw new ArgumentException("Input byte array is null or empty.");
+        using (MemoryStream docxStream = new MemoryStream(docxBytes))
+        {
+            var document = new Document(docxStream, FileFormat.Docx);
+            document.HtmlExportOptions.ImageEmbedded = true;
+            document.HtmlExportOptions.CssStyleSheetType = Spire.Doc.CssStyleSheetType.Inline;
+            using (MemoryStream htmlStream = new MemoryStream())
+            {
+                document.SaveToStream(htmlStream, FileFormat.Html);
+                return htmlStream.ToArray();
+            }
+        }
+    }
+    public static int ExtractVersionNumber(string filePath)
+{
+    var fileName = Path.GetFileNameWithoutExtension(filePath);
+    var match = VersionPattern.Match(fileName);
+    if (match.Success && match.Groups[2].Success && int.TryParse(match.Groups[2].Value, out int version))
+    {
+        return version;
+    }
+    return 0; // Default to version 0 if not found
+}
+}
+
 
     public string GetPar(string key, HttpRequestBase request) => Mas.com.eg.Models.invoice.GetPar(key, request);
 }
 @{
-    string id = ViewBag.id ?? "";
+    string id = ViewBag.id;
     string dataResult = "";
     string contentType = "application/json; charset=utf-8";
     byte[] fileBytes = null;
+    string filename = "document";
     Layout = null;
-
     string appPath = HttpRuntime.AppDomainAppPath;
 
     try
@@ -399,106 +954,200 @@
         if (id == "read")
         {
             string relativePath = GetPar("filePath", Request);
-            string fullPath = Path.Combine(appPath, relativePath);
-            string latestVersionPath = DocumentConverter.FindLatestVersion(fullPath);
-
-            if (!System.IO.File.Exists(latestVersionPath)) { throw new FileNotFoundException("Template file not found.", latestVersionPath); }
-
-            object jsonData;
-            string extension = Path.GetExtension(latestVersionPath).ToLower();
-            if (extension == ".xlsx")
+            if (string.IsNullOrEmpty(relativePath))
             {
-                jsonData = DocumentConverter.ConvertXlsxToJson(latestVersionPath);
+                throw new ArgumentException("filePath parameter is missing or empty.");
             }
-            else
+
+            int? version = null;
+            string versionParam = GetPar("v", Request);
+            if (!string.IsNullOrEmpty(versionParam) && int.TryParse(versionParam, out int v))
             {
-                jsonData = DocumentConverter.ConvertDocxToJson(latestVersionPath);
+                version = v;
             }
-            dataResult = JsonConvert.SerializeObject(new { success = true, json = jsonData });
+
+            string fullPath = Path.Combine(appPath, relativePath.TrimStart('\\', '/').Replace('/', '\\'));
+            var result = DocumentConverter.ConvertDocxToJson(fullPath, version);
+            dataResult = JsonConvert.SerializeObject(result);
         }
         else if (id == "write" || id == "pdf" || id == "html")
         {
             string jsonInput = GetPar("jsonInput", Request);
             string recordID = GetPar("recordid", Request);
 
-            DocumentConverter.FileResult result;
-            string fileVersionPath = JsonConvert.DeserializeObject<DocumentConverter.JsonPayload>(jsonInput).FileVersionPath;
-
-            if (Path.GetExtension(fileVersionPath).ToLower() == ".xlsx")
+            if (string.IsNullOrEmpty(jsonInput))
             {
-                result = DocumentConverter.ConvertJsonToXlsx(jsonInput, appPath);
-                contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+                throw new ArgumentException("jsonInput parameter is missing or empty.");
+            }
+
+            DocumentConverter.NewDoc result = DocumentConverter.ConvertJsonToDocx(jsonInput, appPath, recordID);
+            if (!result.success)
+            {
+                dataResult = JsonConvert.SerializeObject(result);
             }
             else
             {
-                result = DocumentConverter.ConvertJsonToDocx(jsonInput, appPath, recordID);
-                contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-            }
-
-            if (!result.Success) { throw new Exception(result.Message); }
-
-            fileBytes = result.FileBytes;
-
-            if (id == "pdf" && fileBytes != null)
-            {
-                using (var docxStream = new MemoryStream(fileBytes))
+                fileBytes = result.fileBytes;
+                var tempPayload = JsonConvert.DeserializeObject<DocumentConverter.JsonPayload>(jsonInput);
+                if (tempPayload != null && !string.IsNullOrEmpty(tempPayload.FileVersionPath))
                 {
-                    var document = new Spire.Doc.Document(docxStream, Spire.Doc.FileFormat.Docx);
-                    using (var pdfStream = new MemoryStream())
+                    filename = Path.GetFileNameWithoutExtension(tempPayload.FileVersionPath);
+                }
+
+                if (id == "write")
+                {
+                    contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+                }
+                else if (id == "pdf")
+                {
+                    fileBytes = DocumentConverter.ConvertDocxToPdf(fileBytes);
+                    contentType = "application/pdf";
+                }
+                else if (id == "html")
+                {
+                    try
                     {
-                        document.SaveToStream(pdfStream, Spire.Doc.FileFormat.PDF);
-                        fileBytes = pdfStream.ToArray();
+                        fileBytes = DocumentConverter.ConvertDocxToHtml(fileBytes);
+                        contentType = "text/html";
+                    }
+                    catch (Exception ex)
+                    {
+                        fileBytes = null;
+                        dataResult = JsonConvert.SerializeObject(new { success = false, message = "Error during HTML conversion: " + ex.Message });
                     }
                 }
-                contentType = "application/pdf";
-            }
-            else if (id == "html" && fileBytes != null)
-            {
-                using (var docxStream = new MemoryStream(fileBytes))
-                {
-                    var document = new Spire.Doc.Document(docxStream, Spire.Doc.FileFormat.Docx);
-                    document.HtmlExportOptions.ImageEmbedded = true;
-                    using (var htmlStream = new MemoryStream())
-                    {
-                        document.SaveToStream(htmlStream, Spire.Doc.FileFormat.Html);
-                        fileBytes = htmlStream.ToArray();
-                    }
-                }
-                contentType = "text/html";
             }
         }
         else if (id == "upload_new_file")
+{
+    string relativePath = GetPar("p", Request);
+    string baseFilePath = GetPar("baseFilePath", Request); // Get the new parameter for versioning existing files
+
+    if (Request.Files.Count == 0)
+    {
+        dataResult = JsonConvert.SerializeObject(new { success = false, message = "No file was uploaded." });
+    }
+    else
+    {
+        HttpPostedFileBase uploadedFile = Request.Files[0];
+        string finalSavePath = "";
+        bool canSave = true;
+
+        // Case 1: This is a new version of an EXISTING document.
+        // The 'uploadTemplateButton' was clicked.
+        if (!string.IsNullOrEmpty(baseFilePath))
         {
-            string relativePath = GetPar("p", Request);
-            if (Request.Files.Count == 0) { throw new Exception("No file uploaded."); }
-
-            HttpPostedFileBase uploadedFile = Request.Files[0];
-            string fileName = Path.GetFileName(uploadedFile.FileName);
-
-            string saveDir = Path.Combine(appPath, "Docs", relativePath, "Forms");
+            string fullBasePath = Path.Combine(appPath, baseFilePath.TrimStart('\\', '/').Replace('/', '\\'));
+            // Generate the next version name based on the path of the file we are updating.
+            finalSavePath = DocumentConverter.GenerateNewVersionFileName(fullBasePath);
+        }
+        // Case 2: This is a brand new document upload.
+        // The 'addNewFileModal' was used.
+        else
+        {
+            string uploadedFileName = Path.GetFileName(uploadedFile.FileName);
+            string saveDir = Path.Combine(appPath, relativePath, "Forms");
             if (!Directory.Exists(saveDir)) { Directory.CreateDirectory(saveDir); }
+            
+            string initialPath = Path.Combine(saveDir, uploadedFileName);
+            var match = DocumentConverter.VersionPattern.Match(Path.GetFileNameWithoutExtension(uploadedFileName));
 
-            string baseFilePath = Path.Combine(saveDir, fileName);
-            string finalSavePath = baseFilePath;
-
-            if (System.IO.File.Exists(baseFilePath))
+            // Sub-case 2a: The new file is uploaded with a specific revision number.
+            if (match.Success && match.Groups[2].Success)
             {
-                int version = 1;
-                string baseFileName = Path.GetFileNameWithoutExtension(baseFilePath);
-                string extension = Path.GetExtension(baseFilePath);
-                while (System.IO.File.Exists(Path.Combine(saveDir, $"{baseFileName}-v({version}){extension}")))
+                if (System.IO.File.Exists(initialPath))
                 {
-                    version++;
+                    canSave = false;
+                    dataResult = JsonConvert.SerializeObject(new { success = false, message = $"File with the same name '{uploadedFileName}' already exists. Replacement is not allowed." });
                 }
-                finalSavePath = Path.Combine(saveDir, $"{baseFileName}-v({version}){extension}");
+                else
+                {
+                    finalSavePath = initialPath;
+                }
             }
+            // Sub-case 2b: The new file has no revision number, so we assign one.
+            else
+            {
+                finalSavePath = DocumentConverter.GenerateNewVersionFileName(initialPath);
+            }
+        }
 
+        if (canSave)
+        {
             uploadedFile.SaveAs(finalSavePath);
-            dataResult = JsonConvert.SerializeObject(new { success = true, message = $"File uploaded to {finalSavePath.Replace(appPath, "")}" });
+            int finalVersion = DocumentConverter.ExtractVersionNumber(finalSavePath);
+            dataResult = JsonConvert.SerializeObject(new
+            {
+                success = true,
+                message = $"File uploaded successfully. Version is now (Rev {finalVersion:D2}).",
+                filePath = finalSavePath.Replace(appPath, "")
+            });
+        }
+    }
+}else if (id == "upload_coded_file")
+        {
+            string relativePath = GetPar("p", Request); // e.g., "Docs/1 - Laboratory"
+            string codedFileName = GetPar("codedFileName", Request);
+
+            if (Request.Files.Count == 0)
+            {
+                dataResult = JsonConvert.SerializeObject(new { success = false, message = "لم يتم رفع أي ملف." });
+            }
+            else if (string.IsNullOrEmpty(codedFileName))
+            {
+                dataResult = JsonConvert.SerializeObject(new { success = false, message = "اسم الملف المكوّد مطلوب." });
+            }
+            else
+            {
+                HttpPostedFileBase uploadedFile = Request.Files[0];
+                // The target directory is always the 'Forms' subfolder within the current department path
+string saveDir = Path.Combine(appPath, "Docs", relativePath, "Forms");
+                if (!Directory.Exists(saveDir))
+                {
+                    Directory.CreateDirectory(saveDir);
+                }
+
+                string finalSavePath = Path.Combine(saveDir, codedFileName);
+
+                // Check if a file with the same name already exists to prevent overwriting
+                if (System.IO.File.Exists(finalSavePath))
+                {
+                    dataResult = JsonConvert.SerializeObject(new { success = false, message = $"ملف بنفس الاسم '{codedFileName}' موجود بالفعل. يرجى تغيير رقم الإجراء أو اسم الملف." });
+                }
+                else
+                {
+                    uploadedFile.SaveAs(finalSavePath);
+                    dataResult = JsonConvert.SerializeObject(new { success = true, message = "تم رفع الملف المكوّد بنجاح.", filePath = finalSavePath.Replace(appPath, "") });
+                }
+            }
+        }
+        else if (id == "fullObject")
+        {
+            string filePath = GetPar("filePath", Request);
+            if (string.IsNullOrEmpty(filePath))
+            {
+                throw new ArgumentException("filePath parameter is missing or empty");
+            }
+            string fullPath = Path.Combine(appPath, filePath.Replace('/', '\\'));
+            string latestVersionPath = DocumentConverter.GetVersionedPath(fullPath, null);
+
+            if (!System.IO.File.Exists(latestVersionPath))
+            {
+                dataResult = JsonConvert.SerializeObject(new { success = false, message = "لم يتم العثور على الملف." });
+            }
+            else
+            {
+                using (WordprocessingDocument wordDoc = WordprocessingDocument.Open(latestVersionPath, false))
+                {
+                    var body = wordDoc.MainDocumentPart.Document.Body;
+                    Newtonsoft.Json.Linq.JObject fullJson = ConvertElementToJson(body);
+                    dataResult = JsonConvert.SerializeObject(new { success = true, documentTree = fullJson }, Formatting.Indented);
+                }
+            }
         }
         else
         {
-            throw new Exception("Invalid action specified.");
+            dataResult = JsonConvert.SerializeObject(new { success = false, message = "إجراء غير صالح." });
         }
     }
     catch (Exception ex)
@@ -507,20 +1156,17 @@
         dataResult = JsonConvert.SerializeObject(new { success = false, message = ex.Message, stackTrace = ex.StackTrace });
     }
 
-    if (fileBytes != null)
+    if (fileBytes != null && fileBytes.Length > 0)
     {
-        string filePathParam = GetPar("filePath", Request);
-        string fileName = "document";
-        if (!string.IsNullOrEmpty(filePathParam))
+        string extension = ".tmp";
+        if (contentType.Contains("pdf")) { extension = ".pdf"; }
+        else if (contentType.Contains("html")) { extension = ".html"; }
+        else if (contentType.Contains("wordprocessingml")) { extension = ".docx"; }
+
+        if (contentType != "text/html")
         {
-            fileName = Path.GetFileName(filePathParam);
+            Response.AddHeader("Content-Disposition", $"attachment; filename=\"{filename}{extension}\"");
         }
-
-        string extension = Path.GetExtension(fileName);
-        if (id == "pdf") { extension = ".pdf"; }
-        if (id == "html") { extension = ".html"; }
-
-        Response.AddHeader("Content-Disposition", $"attachment; filename=\"{Path.GetFileNameWithoutExtension(fileName)}{extension}\"");
         Response.ContentType = contentType;
         Response.BinaryWrite(fileBytes);
     }
@@ -532,4 +1178,7 @@
 
     Response.Flush();
     Response.End();
+}
+
+
 }
