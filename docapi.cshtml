@@ -489,6 +489,10 @@ private static void InjectTextToParagraphSafe(Wp.Paragraph para, JsonParagraph j
             para.PrependChild(pPr);
         }
 
+        var existingRunTemplates = para.Elements<Wp.Run>()
+            .Select(r => r.RunProperties != null ? (Wp.RunProperties)r.RunProperties.CloneNode(true) : null)
+            .ToList();
+
         if (jsonPara.Formatting.TryGetValue("Direction", out object dirValue) && dirValue?.ToString() == "RTL")
         {
             if (pPr.BiDi == null) pPr.Append(new Wp.BiDi());
@@ -571,6 +575,11 @@ private static void InjectTextToParagraphSafe(Wp.Paragraph para, JsonParagraph j
 
             para.RemoveAllChildren<Wp.Run>();
             var fallbackRun = new Wp.Run();
+            var fallbackRunProps = ResolveRunProperties(existingRunTemplates, 0, null);
+            if (fallbackRunProps != null)
+            {
+                fallbackRun.RunProperties = fallbackRunProps;
+            }
             var text = new Wp.Text(fallbackText) { Space = SpaceProcessingModeValues.Preserve };
             fallbackRun.Append(text);
             para.AppendChild(fallbackRun);
@@ -585,6 +594,7 @@ private static void InjectTextToParagraphSafe(Wp.Paragraph para, JsonParagraph j
 
         para.RemoveAllChildren<Wp.Run>();
 
+        int runIndex = 0;
         foreach (var runData in extractedRuns)
         {
             if (runData == null) continue;
@@ -593,9 +603,10 @@ private static void InjectTextToParagraphSafe(Wp.Paragraph para, JsonParagraph j
 
             var run = new Wp.Run();
             var runProperties = BuildRunProperties(runData);
-            if (runProperties != null && runProperties.HasChildren)
+            var resolvedProperties = ResolveRunProperties(existingRunTemplates, runIndex, runProperties);
+            if (resolvedProperties != null)
             {
-                run.PrependChild(runProperties);
+                run.RunProperties = resolvedProperties;
             }
 
             var normalizedText = decodedText.Replace("\r\n", "\n");
@@ -610,6 +621,7 @@ private static void InjectTextToParagraphSafe(Wp.Paragraph para, JsonParagraph j
             }
 
             para.AppendChild(run);
+            runIndex++;
         }
     }
     catch (Exception)
@@ -621,20 +633,23 @@ private static Wp.RunProperties BuildRunProperties(JsonRun runData)
 {
     if (runData == null) return null;
 
-    var runProperties = new Wp.RunProperties();
+    Wp.RunProperties runProperties = null;
 
     if (runData.Formatting != null)
     {
         if (TryGetBoolean(runData.Formatting, "Bold"))
         {
+            if (runProperties == null) runProperties = new Wp.RunProperties();
             runProperties.AppendChild(new Wp.Bold());
         }
         if (TryGetBoolean(runData.Formatting, "Italic"))
         {
+            if (runProperties == null) runProperties = new Wp.RunProperties();
             runProperties.AppendChild(new Wp.Italic());
         }
         if (TryGetBoolean(runData.Formatting, "Underline"))
         {
+            if (runProperties == null) runProperties = new Wp.RunProperties();
             var underline = new Wp.Underline();
             if (runData.FormattingValues != null && runData.FormattingValues.TryGetValue("UnderlineStyle", out string underlineStyle) &&
                 Enum.TryParse(underlineStyle, true, out Wp.UnderlineValues underlineValue))
@@ -653,10 +668,12 @@ private static Wp.RunProperties BuildRunProperties(JsonRun runData)
     {
         if (runData.FormattingValues.TryGetValue("ColorValue", out string colorValue) && !string.IsNullOrWhiteSpace(colorValue))
         {
+            if (runProperties == null) runProperties = new Wp.RunProperties();
             runProperties.AppendChild(new Wp.Color { Val = colorValue });
         }
         if (runData.FormattingValues.TryGetValue("HighlightValue", out string highlightValue) && !string.IsNullOrWhiteSpace(highlightValue))
         {
+            if (runProperties == null) runProperties = new Wp.RunProperties();
             if (Enum.TryParse(highlightValue, true, out Wp.HighlightColorValues highlightEnum))
             {
                 runProperties.AppendChild(new Wp.Highlight { Val = highlightEnum });
@@ -668,14 +685,17 @@ private static Wp.RunProperties BuildRunProperties(JsonRun runData)
         }
         if (runData.FormattingValues.TryGetValue("ShadingValue", out string shadingValue) && !string.IsNullOrWhiteSpace(shadingValue))
         {
+            if (runProperties == null) runProperties = new Wp.RunProperties();
             runProperties.AppendChild(new Wp.Shading { Fill = shadingValue, Val = Wp.ShadingPatternValues.Clear });
         }
         if (runData.FormattingValues.TryGetValue("FontSize", out string fontSize) && !string.IsNullOrWhiteSpace(fontSize))
         {
+            if (runProperties == null) runProperties = new Wp.RunProperties();
             runProperties.AppendChild(new Wp.FontSize { Val = fontSize });
         }
         if (runData.FormattingValues.TryGetValue("FontFamily", out string fontFamily) && !string.IsNullOrWhiteSpace(fontFamily))
         {
+            if (runProperties == null) runProperties = new Wp.RunProperties();
             runProperties.AppendChild(new Wp.RunFonts { Ascii = fontFamily, HighAnsi = fontFamily, ComplexScript = fontFamily });
         }
     }
@@ -724,58 +744,223 @@ private static void InjectTextToTableSafe(Wp.Table table, JsonTable jsonTable)
                     continue;
                 }
 
-                var firstParagraph = docxCell.Elements<Wp.Paragraph>().FirstOrDefault();
-
-                if (firstParagraph == null)
+                var existingParagraphs = docxCell.Elements<Wp.Paragraph>().ToList();
+                if (!existingParagraphs.Any())
                 {
-                    firstParagraph = new Wp.Paragraph();
-                    docxCell.Append(firstParagraph);
+                    var newParagraph = new Wp.Paragraph();
+                    docxCell.Append(newParagraph);
+                    existingParagraphs.Add(newParagraph);
                 }
 
-                var paragraphsToRemove = docxCell.Elements<Wp.Paragraph>().Skip(1).ToList();
-                foreach (var p in paragraphsToRemove)
-                {
-                    p.Remove();
-                }
+                var paragraphPayloads = hasFormattedRuns
+                    ? BuildParagraphPayloadFromRuns(jsonCell.FormattedRuns, existingParagraphs.Count)
+                    : BuildParagraphPayloadFromPlainText(jsonCell.Content, existingParagraphs.Count);
 
-                if (hasFormattedRuns)
-                {
-                    var payload = new JsonParagraph { Content = new List<object>() };
-                    foreach (var run in jsonCell.FormattedRuns)
-                    {
-                        if (run == null || run.Text == null) continue;
-                        payload.Content.Add(new JsonRun
-                        {
-                            Text = run.Text,
-                            Formatting = run.Formatting != null
-                                ? new Dictionary<string, bool>(run.Formatting)
-                                : new Dictionary<string, bool>(),
-                            FormattingValues = run.FormattingValues != null
-                                ? new Dictionary<string, string>(run.FormattingValues)
-                                : new Dictionary<string, string>()
-                        });
-                    }
-
-                    if (payload.Content.Count > 0)
-                    {
-                        InjectTextToParagraphSafe(firstParagraph, payload);
-                    }
-                }
-                else if (hasPlainContent)
-                {
-                    var tempJsonPara = new JsonParagraph
-                    {
-                        Content = new List<object> { new JsonRun { Text = jsonCell.Content } }
-                    };
-
-                    InjectTextToParagraphSafe(firstParagraph, tempJsonPara);
-                }
+                ApplyParagraphPayloadsToCell(docxCell, existingParagraphs, paragraphPayloads, jsonCell);
             }
         }
     }
     catch (Exception)
     {
     }
+}
+
+private static void ApplyParagraphPayloadsToCell(Wp.TableCell docxCell, List<Wp.Paragraph> existingParagraphs,
+    List<List<JsonRun>> paragraphPayloads, JsonTableCell jsonCell)
+{
+    if (docxCell == null || paragraphPayloads == null || paragraphPayloads.Count == 0)
+    {
+        return;
+    }
+
+    while (existingParagraphs.Count < paragraphPayloads.Count)
+    {
+        var cloned = CloneParagraphWithProperties(existingParagraphs.LastOrDefault());
+        docxCell.Append(cloned);
+        existingParagraphs.Add(cloned);
+    }
+
+    for (int paragraphIndex = 0; paragraphIndex < paragraphPayloads.Count; paragraphIndex++)
+    {
+        var targetParagraph = existingParagraphs[paragraphIndex];
+        var payloadRuns = paragraphPayloads[paragraphIndex] ?? new List<JsonRun>();
+
+        var jsonParagraph = new JsonParagraph();
+        if (!string.IsNullOrEmpty(jsonCell?.Direction))
+        {
+            jsonParagraph.Formatting["Direction"] = jsonCell.Direction;
+        }
+        if (!string.IsNullOrEmpty(jsonCell?.Alignment))
+        {
+            jsonParagraph.Formatting["Alignment"] = jsonCell.Alignment;
+        }
+
+        jsonParagraph.Content = payloadRuns.Cast<object>().ToList();
+        InjectTextToParagraphSafe(targetParagraph, jsonParagraph);
+
+        if (!payloadRuns.Any())
+        {
+            targetParagraph.RemoveAllChildren<Wp.Run>();
+        }
+    }
+
+    for (int index = paragraphPayloads.Count; index < existingParagraphs.Count; index++)
+    {
+        existingParagraphs[index].RemoveAllChildren<Wp.Run>();
+    }
+}
+
+private static List<List<JsonRun>> BuildParagraphPayloadFromRuns(List<JsonRun> runs, int existingParagraphCount)
+{
+    var payloads = new List<List<JsonRun>>();
+    var current = new List<JsonRun>();
+
+    if (runs != null)
+    {
+        foreach (var run in runs)
+        {
+            if (run == null)
+            {
+                continue;
+            }
+
+            if (IsParagraphSeparator(run))
+            {
+                payloads.Add(current);
+                current = new List<JsonRun>();
+                continue;
+            }
+
+            current.Add(CloneRunWithText(run, run.Text));
+        }
+    }
+
+    payloads.Add(current);
+
+    if (!payloads.Any())
+    {
+        payloads.Add(new List<JsonRun>());
+    }
+
+    while (existingParagraphCount > payloads.Count)
+    {
+        payloads.Add(new List<JsonRun>());
+    }
+
+    return payloads;
+}
+
+private static List<List<JsonRun>> BuildParagraphPayloadFromPlainText(string content, int existingParagraphCount)
+{
+    var payloads = new List<List<JsonRun>>();
+    var normalized = (content ?? string.Empty).Replace("\r\n", "\n");
+    var segments = normalized.Split(new[] { "\n" }, StringSplitOptions.None);
+
+    foreach (var segment in segments)
+    {
+        payloads.Add(new List<JsonRun> { new JsonRun { Text = segment } });
+    }
+
+    if (!payloads.Any())
+    {
+        payloads.Add(new List<JsonRun>());
+    }
+
+    while (existingParagraphCount > payloads.Count)
+    {
+        payloads.Add(new List<JsonRun>());
+    }
+
+    return payloads;
+}
+
+private static bool IsParagraphSeparator(JsonRun run)
+{
+    if (run == null || run.Text == null)
+    {
+        return false;
+    }
+
+    if (!string.Equals(run.Text, "\n", StringComparison.Ordinal))
+    {
+        return false;
+    }
+
+    bool hasFormatting = (run.Formatting != null && run.Formatting.Any()) ||
+                         (run.FormattingValues != null && run.FormattingValues.Any());
+    return !hasFormatting;
+}
+
+private static JsonRun CloneRunWithText(JsonRun source, string text)
+{
+    if (source == null)
+    {
+        return new JsonRun { Text = text };
+    }
+
+    return new JsonRun
+    {
+        Text = text,
+        Formatting = source.Formatting != null
+            ? new Dictionary<string, bool>(source.Formatting)
+            : new Dictionary<string, bool>(),
+        FormattingValues = source.FormattingValues != null
+            ? new Dictionary<string, string>(source.FormattingValues)
+            : new Dictionary<string, string>()
+    };
+}
+
+private static Wp.Paragraph CloneParagraphWithProperties(Wp.Paragraph referenceParagraph)
+{
+    var newParagraph = new Wp.Paragraph();
+    if (referenceParagraph?.ParagraphProperties != null)
+    {
+        newParagraph.ParagraphProperties = (Wp.ParagraphProperties)referenceParagraph.ParagraphProperties.CloneNode(true);
+    }
+
+    var referenceRuns = referenceParagraph?.Elements<Wp.Run>().ToList();
+    if (referenceRuns != null && referenceRuns.Count > 0)
+    {
+        foreach (var refRun in referenceRuns)
+        {
+            var newRun = new Wp.Run();
+            if (refRun.RunProperties != null)
+            {
+                newRun.RunProperties = (Wp.RunProperties)refRun.RunProperties.CloneNode(true);
+            }
+            newParagraph.AppendChild(newRun);
+        }
+    }
+
+    return newParagraph;
+}
+
+private static Wp.RunProperties ResolveRunProperties(List<Wp.RunProperties> templates, int runIndex, Wp.RunProperties explicitProperties)
+{
+    if (explicitProperties != null)
+    {
+        return explicitProperties;
+    }
+
+    if (templates == null || templates.Count == 0)
+    {
+        return null;
+    }
+
+    if (runIndex < templates.Count && templates[runIndex] != null)
+    {
+        return (Wp.RunProperties)templates[runIndex].CloneNode(true);
+    }
+
+    foreach (var template in templates)
+    {
+        if (template != null)
+        {
+            return (Wp.RunProperties)template.CloneNode(true);
+        }
+    }
+
+    return null;
 }
           
           private static string GetParagraphAlignment(Wp.Paragraph para, MainDocumentPart mainPart)
