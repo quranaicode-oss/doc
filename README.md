@@ -17,7 +17,9 @@ This repository contains the Razor views that power MAS ERP's document managemen
 ### DOCX Handling Strategy
 The `DocxToJsonConverter2` class demonstrates how we preserve the fidelity of Word documents:
 - **Structure traversal** – opens `.docx` files through the Open XML SDK, inspects paragraphs, tables, and hyperlinks, and serializes each element with unique IDs so the front-end can render and edit them predictably.
+- **Deterministic mapping** – attaches a `StructureKey` to each paragraph/table that encodes its hierarchical path so edited JSON targets the exact source element even across nested content controls.
 - **Formatting capture** – collects run-level formatting (bold, italics, underline, font family/size, colors, shading, highlighting) and paragraph-level settings (alignment, bidirectional layout, background fills).
+- **Line fidelity** – preserves manual line breaks, tabs, and checkbox glyphs when translating runs to JSON/HTML to keep the Word layout intact during round-trips.
 - **Table intelligence** – records table, row, and cell borders, merged cells (`GridSpan`, vertical merges with computed `rowSpan`), background fills, and paragraph direction so complex layouts survive round-trips.
 - **Interactive controls** – detects content controls for checkboxes (`SdtRun`) and maps them to structured JSON objects containing both the checked state and descriptive text.
 - **Culture awareness** – inspects document defaults to determine left-to-right vs. right-to-left direction, ensuring Arabic layouts keep their reading order when rendered on the web.
@@ -70,7 +72,9 @@ Although the current snapshot focuses on Word files, the same design can be exte
 
 ### منهجية التعامل مع ملفات Word
 - **قراءة الهيكل**: يتم فتح الملف عبر Open XML واستعراض الفقرات والجداول والارتباطات مع إعطاء كل عنصر رقمًا فريدًا.
+- **مفتاح بنيوي ثابت**: تتم إضافة خاصية `StructureKey` لكل فقرة/جدول لتمثيل مسارها داخل المستند، مما يسمح بإعادة الحقن داخل العنصر الصحيح حتى مع وجود عناصر متداخلة.
 - **حفظ التنسيق**: يتم التقاط خصائص الخطوط (غامق، مائل، مسطر، اللون، حجم الخط، اسم الخط، الخلفيات) بالإضافة إلى محاذاة الفقرات واتجاهها.
+- **الحفاظ على الأسطر**: يتم الاحتفاظ بعمليات الانتقال للسطر (`Line Breaks`) وعلامات التبويب ومربعات الاختيار أثناء التحويل بين JSON و HTML لضمان تطابق العرض مع ملف Word الأصلي.
 - **ذكاء الجداول**: تُحفظ حدود الجداول والصفوف والخلايا، وحالات الدمج، ولون الخلفية، واتجاه الكتابة داخل كل خلية.
 - **عناصر تفاعلية**: يتم اكتشاف مربعات الاختيار داخل المستند وتحويلها إلى JSON مع حالة التحديد والنص المرافق.
 - **دعم اللغات**: يتم تحديد اتجاه المستند (RTL/LTR) تلقائيًا لضمان ظهور المستندات العربية بشكل صحيح.
