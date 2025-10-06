@@ -929,34 +929,41 @@
             return;
         }
         docContainer.css('direction', documentData.json.Direction || 'ltr');
-        const renderRun = (run, elementId, runIndex) => {
-    if (!run || typeof run.Text === 'undefined') return '';
-    let runStyle = '';
-    const f = run.Formatting || {};
-    const fv = run.FormattingValues || {};
-    if (f.Bold) runStyle += 'font-weight: bold;';
-    if (f.Italic) runStyle += 'font-style: italic;';
-    if (f.Underline) runStyle += 'text-decoration: underline;';
-    if (fv.ColorValue) runStyle += `color: #${fv.ColorValue};`;
-    if (fv.FontSize) runStyle += `font-size: ${parseInt(fv.FontSize) / 2}pt;`;
-    if (fv.FontFamily) runStyle += `font-family: "${fv.FontFamily}";`;
-    if (fv.ShadingValue) runStyle += `background-color: #${fv.ShadingValue};`;
+        const formatRunText = (text) => {
+            if (typeof text !== 'string') return '';
+            const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            return normalized
+                .split('\n')
+                .map(line => escapeHtml(line).replace(/\t/g, '&emsp;').replace(/ /g, '&nbsp;'))
+                .join('<br>');
+        };
 
-    if (run.Text.includes('☐') || run.Text.includes('☑')) {
-        const textParts = run.Text.split(/(☐|☑)/).filter(part => part);
-        return textParts.map(part => {
-            if (part === '☐' || part === '☑') {
-                const isChecked = part === '☑';
-                return `<input type="checkbox" class="editable-checkbox-symbol" ${isChecked ? 'checked' : ''}>`;
-            } else {
-                // Apply escaping to the text part
-                return `<span style="${runStyle}">${escapeHtml(part).replace(/ /g, '&nbsp;')}</span>`;
+        const renderRun = (run, elementId, runIndex) => {
+            if (!run || typeof run.Text === 'undefined') return '';
+            let runStyle = '';
+            const f = run.Formatting || {};
+            const fv = run.FormattingValues || {};
+            if (f.Bold) runStyle += 'font-weight: bold;';
+            if (f.Italic) runStyle += 'font-style: italic;';
+            if (f.Underline) runStyle += 'text-decoration: underline;';
+            if (fv.ColorValue) runStyle += `color: #${fv.ColorValue};`;
+            if (fv.FontSize) runStyle += `font-size: ${parseInt(fv.FontSize) / 2}pt;`;
+            if (fv.FontFamily) runStyle += `font-family: "${fv.FontFamily}";`;
+            if (fv.ShadingValue) runStyle += `background-color: #${fv.ShadingValue};`;
+
+            if (run.Text.includes('☐') || run.Text.includes('☑')) {
+                const textParts = run.Text.split(/(☐|☑)/).filter(part => part);
+                return textParts.map(part => {
+                    if (part === '☐' || part === '☑') {
+                        const isChecked = part === '☑';
+                        return `<input type="checkbox" class="editable-checkbox-symbol" ${isChecked ? 'checked' : ''}>`;
+                    } else {
+                        return `<span style="${runStyle}">${formatRunText(part)}</span>`;
+                    }
+                }).join('');
             }
-        }).join('');
-    }
-    // Apply escaping to the whole text
-    return `<span style="${runStyle}">${escapeHtml(run.Text || '').replace(/ /g, '&nbsp;')}</span>`;
-};
+            return `<span style="${runStyle}">${formatRunText(run.Text || '')}</span>`;
+        };
 function escapeHtml(text) {
     if (typeof text !== 'string') return '';
     return text
@@ -1039,11 +1046,15 @@ function escapeHtml(text) {
                 } else if (this.nodeType === Node.ELEMENT_NODE) {
                     if (this.tagName.toLowerCase() === 'input' && this.type.toLowerCase() === 'checkbox') {
                         newTextContent += this.checked ? '☑' : '☐';
+                    } else if (this.tagName.toLowerCase() === 'br') {
+                        newTextContent += '\n';
                     } else {
                         newTextContent += $(this).text();
                     }
                 }
             });
+
+            newTextContent = newTextContent.replace(/\u00A0/g, ' ').replace(/\u2003/g, '\t');
 
             if (targetArray.length > 0) {
                 targetArray[0].Text = newTextContent;

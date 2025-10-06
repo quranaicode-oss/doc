@@ -3,7 +3,9 @@
 @using System.Data
 @using System.IO
 @using System.Linq
+@using System.Globalization
 @using System.Web
+@using System.Text
 @using System.Text.RegularExpressions
 @using Newtonsoft.Json
 @using DocumentFormat.OpenXml
@@ -61,13 +63,13 @@
         public int Version { get; set; }
     }
 
-    public class JsonParagraph { public int ID { get; set; } public string Type { get; set; } = "Paragraph"; public List<object> Content { get; set; } = new List<object>(); public Dictionary<string, object> Formatting { get; set; } = new Dictionary<string, object>(); }
+    public class JsonParagraph { public int ID { get; set; } public string Type { get; set; } = "Paragraph"; public string StructureKey { get; set; } public List<object> Content { get; set; } = new List<object>(); public Dictionary<string, object> Formatting { get; set; } = new Dictionary<string, object>(); }
     public class JsonRun { public string Text { get; set; } public Dictionary<string, bool> Formatting { get; set; } = new Dictionary<string, bool>(); public Dictionary<string, string> FormattingValues { get; set; } = new Dictionary<string, string>(); }
     public class JsonCheckbox { public string Type { get; set; } = "Checkbox"; public bool IsChecked { get; set; } public string Content { get; set; } }
-    public class JsonTable { public int ID { get; set; } public string Type { get; set; } = "Table"; public List<JsonTableRow> Content { get; set; } = new List<JsonTableRow>(); public Dictionary<string, string> Borders { get; set; } = new Dictionary<string, string>(); }
+    public class JsonTable { public int ID { get; set; } public string Type { get; set; } = "Table"; public string StructureKey { get; set; } public List<JsonTableRow> Content { get; set; } = new List<JsonTableRow>(); public Dictionary<string, string> Borders { get; set; } = new Dictionary<string, string>(); }
     public class JsonTableRow { public List<JsonTableCell> Cells { get; set; } = new List<JsonTableCell>(); public Dictionary<string, string> Borders { get; set; } = new Dictionary<string, string>(); }
     public class JsonTableCell { public string Content { get; set; } public int GridSpan { get; set; } = 1; public string VerticalMerge { get; set; } public List<JsonRun> FormattedRuns { get; set; } = new List<JsonRun>(); public List<JsonCheckbox> Checkboxes { get; set; } = new List<JsonCheckbox>(); public Dictionary<string, string> Borders { get; set; } = new Dictionary<string, string>(); public int? rowSpan { get; set; } public string Direction { get; set; } public string Alignment { get; set; } public string TextRotation { get; set; }}
-    public class JsonImage { public int ID { get; set; } public string Type { get; set; } = "Image"; public string Content { get; set; } }
+    public class JsonImage { public int ID { get; set; } public string Type { get; set; } = "Image"; public string StructureKey { get; set; } public string Content { get; set; } }
 public static readonly Regex VersionPattern = new Regex(@"^(.+?)(?:\s*\(Rev\s?(\d+)\))?$", RegexOptions.IgnoreCase);
           public static string GetVersionedPath(string basePath, int? version)
         {
@@ -227,34 +229,45 @@ public static NewDoc ConvertJsonToDocx(string jsonInput, string appPath, string 
             {
                 var body = wordDoc.MainDocumentPart.Document.Body;
 
-                var jsonElements = payload.Elements.GetEnumerator();
-                var docElements = body.Elements().ToList();
-                var docElementEnumerator = docElements.GetEnumerator();
+                var structuredElements = CollectStructuredDocElements(body);
+                var consumed = new HashSet<int>();
 
-                while (jsonElements.MoveNext())
+                foreach (var element in payload.Elements ?? new List<object>())
                 {
-                    var jObject = Newtonsoft.Json.Linq.JObject.FromObject(jsonElements.Current);
+                    var jObject = element as Newtonsoft.Json.Linq.JObject ?? Newtonsoft.Json.Linq.JObject.FromObject(element);
+                    if (jObject == null) continue;
+
                     string elementType = jObject["Type"]?.ToString();
+                    if (string.IsNullOrEmpty(elementType)) continue;
 
-                    while (docElementEnumerator.MoveNext())
+                    string structureKey = jObject["StructureKey"]?.ToString();
+                    StructuredDocElement match = null;
+
+                    if (!string.IsNullOrEmpty(structureKey))
                     {
-                        var docElement = docElementEnumerator.Current;
+                        match = structuredElements.FirstOrDefault(se => !consumed.Contains(se.Index) &&
+                                                                         se.Type == elementType &&
+                                                                         string.Equals(se.StructureKey, structureKey, StringComparison.Ordinal));
+                    }
 
-                        if (elementType == "Paragraph" && docElement is Wp.Paragraph)
-                        {
-                            var jsonPara = jObject.ToObject<JsonParagraph>();
-                            InjectTextToParagraphSafe((Wp.Paragraph)docElement, jsonPara);
-                            break; 
-                        }
-                        else if (elementType == "Table" && docElement is Wp.Table)
-                        {
-                            var jsonTable = jObject.ToObject<JsonTable>();
-                            InjectTextToTableSafe((Wp.Table)docElement, jsonTable);
-                            break;
-                        }
-                        else if (docElement is Wp.SdtBlock sdtBlock)
-                        {
-                        }
+                    if (match == null)
+                    {
+                        match = structuredElements.FirstOrDefault(se => !consumed.Contains(se.Index) && se.Type == elementType);
+                    }
+
+                    if (match == null) continue;
+
+                    consumed.Add(match.Index);
+
+                    if (elementType == "Paragraph" && match.Element is Wp.Paragraph paragraph)
+                    {
+                        var jsonPara = jObject.ToObject<JsonParagraph>();
+                        InjectTextToParagraphSafe(paragraph, jsonPara);
+                    }
+                    else if (elementType == "Table" && match.Element is Wp.Table table)
+                    {
+                        var jsonTable = jObject.ToObject<JsonTable>();
+                        InjectTextToTableSafe(table, jsonTable);
                     }
                 }
 
@@ -353,18 +366,64 @@ public static object ConvertDocxToJson(string filePath, int? version)
 }
 
 // New helper function to parse elements recursively
-private static void ParseElementsRecursive(IEnumerable<OpenXmlElement> elements, ref int elementIdCounter, MainDocumentPart mainPart, List<object> documentElements)
+private class StructuredDocElement
 {
+    public OpenXmlElement Element { get; set; }
+    public string Type { get; set; }
+    public string StructureKey { get; set; }
+    public int Index { get; set; }
+}
+
+private static List<StructuredDocElement> CollectStructuredDocElements(Wp.Body body)
+{
+    var collected = new List<StructuredDocElement>();
+    int structuralIndex = 0;
+    CollectStructuredDocElementsRecursive(body?.ChildElements, string.Empty, collected, ref structuralIndex);
+    return collected;
+}
+
+private static void CollectStructuredDocElementsRecursive(IEnumerable<OpenXmlElement> elements, string path, List<StructuredDocElement> collector, ref int structuralIndex)
+{
+    if (elements == null) return;
+    int localIndex = 0;
     foreach (var element in elements)
     {
-        elementIdCounter++;
-        if (element is Wp.Paragraph para)
+        string childPath = string.IsNullOrEmpty(path) ? localIndex.ToString() : $"{path}.{localIndex}";
+
+        if (element is Wp.Paragraph paragraph)
         {
-            documentElements.Add(ParseParagraph(para, elementIdCounter, mainPart));
+            collector.Add(new StructuredDocElement { Element = paragraph, Type = "Paragraph", StructureKey = childPath, Index = structuralIndex++ });
         }
         else if (element is Wp.Table table)
         {
-            documentElements.Add(ParseTable(table, elementIdCounter, mainPart));
+            collector.Add(new StructuredDocElement { Element = table, Type = "Table", StructureKey = childPath, Index = structuralIndex++ });
+        }
+        else if (element is Wp.SdtBlock sdtBlock)
+        {
+            CollectStructuredDocElementsRecursive(sdtBlock?.SdtContentBlock?.ChildElements, childPath, collector, ref structuralIndex);
+            localIndex++;
+            continue;
+        }
+
+        localIndex++;
+    }
+}
+
+private static void ParseElementsRecursive(IEnumerable<OpenXmlElement> elements, ref int elementIdCounter, MainDocumentPart mainPart, List<object> documentElements, string path = "")
+{
+    if (elements == null) return;
+    int index = 0;
+    foreach (var element in elements)
+    {
+        string currentKey = string.IsNullOrEmpty(path) ? index.ToString() : $"{path}.{index}";
+        elementIdCounter++;
+        if (element is Wp.Paragraph para)
+        {
+            documentElements.Add(ParseParagraph(para, elementIdCounter, mainPart, currentKey));
+        }
+        else if (element is Wp.Table table)
+        {
+            documentElements.Add(ParseTable(table, elementIdCounter, mainPart, currentKey));
         }
         else if (element is Wp.SdtBlock sdtBlock)
         {
@@ -372,14 +431,17 @@ private static void ParseElementsRecursive(IEnumerable<OpenXmlElement> elements,
             var content = sdtBlock.SdtContentBlock;
             if (content != null)
             {
-                ParseElementsRecursive(content.ChildElements, ref elementIdCounter, mainPart, documentElements);
+                ParseElementsRecursive(content.ChildElements, ref elementIdCounter, mainPart, documentElements, currentKey);
+                index++;
+                continue;
             }
         }
         else if (element.Descendants<Wp.Drawing>().Any())
         {
-            documentElements.AddRange(ParseImages(element, elementIdCounter, mainPart));
+            documentElements.AddRange(ParseImages(element, elementIdCounter, mainPart, currentKey));
         }
         // Other elements are ignored to keep the JSON clean
+        index++;
     }
 }
 
@@ -777,9 +839,60 @@ private static void InjectTextToTableSafe(Wp.Table table, JsonTable jsonTable)
     
     return "left";
 }
-private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, MainDocumentPart mainPart)
+private static string ExtractRunTextWithBreaks(Wp.Run run)
 {
-    var jsonPara = new JsonParagraph { ID = elementId };
+    if (run == null) return string.Empty;
+
+    var builder = new StringBuilder();
+    foreach (var child in run.ChildElements)
+    {
+        switch (child)
+        {
+            case Wp.Text text:
+                builder.Append(text.Text);
+                break;
+            case Wp.TabChar _:
+                builder.Append('\t');
+                break;
+            case Wp.Break _:
+            case Wp.CarriageReturn _:
+                builder.Append('\n');
+                break;
+            case Wp.SymbolChar symbol:
+                var value = symbol.Char?.Value;
+                if (!string.IsNullOrEmpty(value))
+                {
+                    if (int.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int codePoint))
+                    {
+                        builder.Append(char.ConvertFromUtf32(codePoint));
+                    }
+                    else
+                    {
+                        builder.Append(value);
+                    }
+                }
+                break;
+            default:
+                var inner = child.InnerText;
+                if (!string.IsNullOrEmpty(inner))
+                {
+                    builder.Append(inner);
+                }
+                break;
+        }
+    }
+
+    if (builder.Length > 0)
+    {
+        return builder.ToString();
+    }
+
+    return run.InnerText ?? string.Empty;
+}
+
+private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, MainDocumentPart mainPart, string structureKey)
+{
+    var jsonPara = new JsonParagraph { ID = elementId, StructureKey = structureKey };
     var pPr = para.ParagraphProperties;
     if (pPr != null)
     {
@@ -810,11 +923,15 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
             }
             jsonPara.Content.Add(new JsonCheckbox { IsChecked = checkedState?.Val?.Value ?? false, Content = labelText });
         }
-        // ***** THIS IS THE FIX *****
-        // Revert to InnerText to capture all text and symbols, not just <w:t> elements.
-        else if (!string.IsNullOrEmpty(run.InnerText))
+        else
         {
-            var jsonRun = new JsonRun { Text = run.InnerText }; // Using InnerText from v1
+            string runText = ExtractRunTextWithBreaks(run);
+            if (string.IsNullOrEmpty(runText) && !run.Descendants<Wp.Break>().Any() && !run.Descendants<Wp.CarriageReturn>().Any())
+            {
+                continue;
+            }
+
+            var jsonRun = new JsonRun { Text = runText };
             var rPr = run.RunProperties;
             if (rPr != null)
             {
@@ -833,15 +950,15 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
     }
     if (para.Descendants<Wp.Drawing>().Any())
     {
-        var images = ParseImages(para, elementId, mainPart);
+        var images = ParseImages(para, elementId, mainPart, structureKey);
         if (images != null) { jsonPara.Content.AddRange(images); }
     }
     return jsonPara;
 }
 
-    private static JsonTable ParseTable(Wp.Table table, int elementId, MainDocumentPart mainPart)
+    private static JsonTable ParseTable(Wp.Table table, int elementId, MainDocumentPart mainPart, string structureKey)
     {
-        var jsonTable = new JsonTable { ID = elementId };
+        var jsonTable = new JsonTable { ID = elementId, StructureKey = structureKey };
         var tblProps = table.GetFirstChild<Wp.TableProperties>();
         if (tblProps != null)
         {
@@ -858,9 +975,11 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
             jsonTable.Borders["Direction"] = tblProps.GetFirstChild<Wp.BiDiVisual>() != null ? "RTL" : "LTR";
         }
         var tableData = new List<JsonTableRow>();
+        int rowIndex = 0;
         foreach (var row in table.Elements<Wp.TableRow>())
         {
             var jsonRow = new JsonTableRow();
+            int cellIndex = 0;
             foreach (var cell in row.Elements<Wp.TableCell>())
             {
                 var jsonCell = new JsonTableCell();
@@ -877,10 +996,14 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                     jsonCell.Direction = isDocumentRtl ? "RTL" : "LTR";
                     jsonCell.Alignment = isDocumentRtl ? "right" : "left";
                 }
-                
+
+                int paragraphIndex = 0;
                 foreach (var para in cell.Elements<Wp.Paragraph>())
                 {
-                    var parsedPara = ParseParagraph(para, 0, mainPart);
+                    string paragraphKey = string.IsNullOrEmpty(structureKey)
+                        ? null
+                        : $"{structureKey}.r{rowIndex}c{cellIndex}p{paragraphIndex}";
+                    var parsedPara = ParseParagraph(para, 0, mainPart, paragraphKey);
                     if (parsedPara?.Content != null)
                     {
                         var runs = parsedPara.Content.OfType<JsonRun>();
@@ -888,6 +1011,7 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                         var checkboxes = parsedPara.Content.OfType<JsonCheckbox>();
                         if (checkboxes != null) jsonCell.Checkboxes.AddRange(checkboxes);
                     }
+                    paragraphIndex++;
                 }
                 jsonCell.Content = string.Join("", jsonCell.FormattedRuns.Where(r => r != null).Select(r => r.Text ?? ""));
                 var cellProps = cell.TableCellProperties;
@@ -908,8 +1032,10 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                     jsonCell.Borders["Background"] = cellProps.Shading?.Fill ?? "inherit";
                 }
                 jsonRow.Cells.Add(jsonCell);
+                cellIndex++;
             }
             tableData.Add(jsonRow);
+            rowIndex++;
         }
         jsonTable.Content = tableData;
         CalculateRowSpans(jsonTable);
@@ -984,12 +1110,13 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
         }
     }
 
-    private static List<JsonImage> ParseImages(OpenXmlElement element, int elementId, MainDocumentPart mainPart)
+    private static List<JsonImage> ParseImages(OpenXmlElement element, int elementId, MainDocumentPart mainPart, string structureKey)
     {
         var images = new List<JsonImage>();
         try
         {
             var drawings = element.Descendants<Wp.Drawing>();
+            int imageIndex = 0;
             foreach (var drawing in drawings)
             {
                 var blip = drawing.Descendants<A.Blip>().FirstOrDefault();
@@ -1003,10 +1130,12 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                             var imageBytes = new byte[stream.Length];
                             stream.Read(imageBytes, 0, imageBytes.Length);
                             string base64String = Convert.ToBase64String(imageBytes);
-                            images.Add(new JsonImage { ID = elementId, Content = base64String });
+                            string imageKey = string.IsNullOrEmpty(structureKey) ? null : $"{structureKey}:img{imageIndex}";
+                            images.Add(new JsonImage { ID = elementId, Content = base64String, StructureKey = imageKey });
                         }
                     }
                 }
+                imageIndex++;
             }
         }
         catch
