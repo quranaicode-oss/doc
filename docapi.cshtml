@@ -975,9 +975,11 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
             jsonTable.Borders["Direction"] = tblProps.GetFirstChild<Wp.BiDiVisual>() != null ? "RTL" : "LTR";
         }
         var tableData = new List<JsonTableRow>();
+        int rowIndex = 0;
         foreach (var row in table.Elements<Wp.TableRow>())
         {
             var jsonRow = new JsonTableRow();
+            int cellIndex = 0;
             foreach (var cell in row.Elements<Wp.TableCell>())
             {
                 var jsonCell = new JsonTableCell();
@@ -994,10 +996,14 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                     jsonCell.Direction = isDocumentRtl ? "RTL" : "LTR";
                     jsonCell.Alignment = isDocumentRtl ? "right" : "left";
                 }
-                
+
+                int paragraphIndex = 0;
                 foreach (var para in cell.Elements<Wp.Paragraph>())
                 {
-                    var parsedPara = ParseParagraph(para, 0, mainPart);
+                    string paragraphKey = string.IsNullOrEmpty(structureKey)
+                        ? null
+                        : $"{structureKey}.r{rowIndex}c{cellIndex}p{paragraphIndex}";
+                    var parsedPara = ParseParagraph(para, 0, mainPart, paragraphKey);
                     if (parsedPara?.Content != null)
                     {
                         var runs = parsedPara.Content.OfType<JsonRun>();
@@ -1005,6 +1011,7 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                         var checkboxes = parsedPara.Content.OfType<JsonCheckbox>();
                         if (checkboxes != null) jsonCell.Checkboxes.AddRange(checkboxes);
                     }
+                    paragraphIndex++;
                 }
                 jsonCell.Content = string.Join("", jsonCell.FormattedRuns.Where(r => r != null).Select(r => r.Text ?? ""));
                 var cellProps = cell.TableCellProperties;
@@ -1025,8 +1032,10 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                     jsonCell.Borders["Background"] = cellProps.Shading?.Fill ?? "inherit";
                 }
                 jsonRow.Cells.Add(jsonCell);
+                cellIndex++;
             }
             tableData.Add(jsonRow);
+            rowIndex++;
         }
         jsonTable.Content = tableData;
         CalculateRowSpans(jsonTable);
