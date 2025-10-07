@@ -493,13 +493,20 @@ private static void InjectTextToParagraphSafe(Wp.Paragraph para, JsonParagraph j
             .Select(r => r.RunProperties != null ? (Wp.RunProperties)r.RunProperties.CloneNode(true) : null)
             .ToList();
 
-        if (jsonPara.Formatting.TryGetValue("Direction", out object dirValue) && dirValue?.ToString() == "RTL")
+        if (jsonPara.Formatting != null && jsonPara.Formatting.TryGetValue("Direction", out object dirValue))
         {
-            if (pPr.BiDi == null) pPr.Append(new Wp.BiDi());
-        }
-        else
-        {
-            pPr.BiDi?.Remove();
+            var direction = dirValue?.ToString();
+            if (!string.IsNullOrWhiteSpace(direction))
+            {
+                if (direction.Equals("RTL", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (pPr.BiDi == null) pPr.Append(new Wp.BiDi());
+                }
+                else if (!direction.Equals("inherit", StringComparison.OrdinalIgnoreCase))
+                {
+                    pPr.BiDi?.Remove();
+                }
+            }
         }
 
         if (jsonPara.Formatting.TryGetValue("Alignment", out object alignValue))
