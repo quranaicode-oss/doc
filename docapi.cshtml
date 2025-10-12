@@ -476,7 +476,38 @@ private static void ParseElementsRecursive(IEnumerable<OpenXmlElement> elements,
             return versionedPath;
         }
     }
-private static void InjectTextToParagraphSafe(Wp.Paragraph para, JsonParagraph jsonPara)
+    private static Wp.JustificationValues? MapAlignmentToJustification(string alignment)
+    {
+        if (string.IsNullOrWhiteSpace(alignment)) return null;
+
+        var normalized = alignment.Trim().ToLowerInvariant();
+        switch (normalized)
+        {
+            case "left":
+                return Wp.JustificationValues.Left;
+            case "right":
+                return Wp.JustificationValues.Right;
+            case "center":
+                return Wp.JustificationValues.Center;
+            case "justify":
+            case "both":
+                return Wp.JustificationValues.Both;
+            case "distribute":
+                return Wp.JustificationValues.Distribute;
+            case "start":
+                return Wp.JustificationValues.Start;
+            case "end":
+                return Wp.JustificationValues.End;
+            default:
+                if (Enum.TryParse(normalized, true, out Wp.JustificationValues parsed))
+                {
+                    return parsed;
+                }
+                return null;
+        }
+    }
+
+    private static void InjectTextToParagraphSafe(Wp.Paragraph para, JsonParagraph jsonPara)
 {
     if (para == null || jsonPara == null) return;
 
@@ -511,15 +542,16 @@ private static void InjectTextToParagraphSafe(Wp.Paragraph para, JsonParagraph j
 
         if (jsonPara.Formatting.TryGetValue("Alignment", out object alignValue))
         {
-            var alignment = pPr.Justification;
-            if (alignment == null)
+            var targetValue = MapAlignmentToJustification(alignValue?.ToString());
+            if (targetValue.HasValue)
             {
-                alignment = new Wp.Justification();
-                pPr.Append(alignment);
-            }
-            if (Enum.TryParse(alignValue.ToString(), true, out Wp.JustificationValues justificationValue))
-            {
-                alignment.Val = justificationValue;
+                var alignment = pPr.Justification;
+                if (alignment == null)
+                {
+                    alignment = new Wp.Justification();
+                    pPr.Append(alignment);
+                }
+                alignment.Val = targetValue.Value;
             }
         }
 
