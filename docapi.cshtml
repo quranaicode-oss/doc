@@ -1257,36 +1257,15 @@ private static string InferDirectionFromTextContent(string text)
 
     foreach (var ch in text)
     {
-        var bidiCategory = CharUnicodeInfo.GetBidiCategory(ch);
-        switch (bidiCategory)
+        if (IsStrongRtlCharacter(ch))
         {
-            case BidiCategory.RightToLeft:
-            case BidiCategory.RightToLeftArabic:
-            case BidiCategory.RightToLeftEmbedding:
-            case BidiCategory.RightToLeftOverride:
-            case BidiCategory.ArabicLetter:
-            case BidiCategory.ArabicNumber:
-                rtlCount++;
-                break;
-            case BidiCategory.LeftToRight:
-            case BidiCategory.LeftToRightEmbedding:
-            case BidiCategory.LeftToRightOverride:
-            case BidiCategory.EuropeanNumber:
-            case BidiCategory.EuropeanNumberSeparator:
-            case BidiCategory.EuropeanNumberTerminator:
-            case BidiCategory.OtherNumber:
-                ltrCount++;
-                break;
-            default:
-                if (char.IsLetter(ch) && !IsStrongRtlCharacter(ch))
-                {
-                    ltrCount++;
-                }
-                else if (char.IsDigit(ch) && !IsStrongRtlCharacter(ch))
-                {
-                    ltrCount++;
-                }
-                break;
+            rtlCount++;
+            continue;
+        }
+
+        if (IsStrongLtrCharacter(ch))
+        {
+            ltrCount++;
         }
     }
 
@@ -1302,6 +1281,19 @@ private static bool IsStrongRtlCharacter(char ch)
     return (code >= 0x0590 && code <= 0x08FF)
         || (code >= 0xFB1D && code <= 0xFDFF)
         || (code >= 0xFE70 && code <= 0xFEFC);
+}
+
+private static bool IsStrongLtrCharacter(char ch)
+{
+    if (IsStrongRtlCharacter(ch)) return false;
+
+    if (char.IsLetter(ch) || char.IsDigit(ch)) return true;
+
+    var code = (int)ch;
+
+    return (code >= 0x0041 && code <= 0x007A) // Basic Latin letters
+        || (code >= 0x00C0 && code <= 0x02AF) // Latin extended blocks
+        || (code >= 0x1E00 && code <= 0x1EFF); // Latin extended additional
 }
 
 private static bool IsStyleChainRtl(string styleId, MainDocumentPart mainPart)
