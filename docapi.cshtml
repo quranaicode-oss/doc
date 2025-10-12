@@ -854,6 +854,7 @@ private static void ApplyParagraphPayloadsToCell(Wp.TableCell docxCell, List<Wp.
             if (!string.IsNullOrEmpty(cellAlignment))
             {
                 jsonParagraph.Formatting["Alignment"] = cellAlignment;
+                jsonParagraph.Formatting["algin"] = cellAlignment;
             }
         }
 
@@ -1238,7 +1239,11 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
     {
         // ... (Formatting logic remains the same)
         var alignment = NormalizeAlignmentToken(GetParagraphAlignment(para, mainPart));
-        if (!string.IsNullOrEmpty(alignment)) jsonPara.Formatting["Alignment"] = alignment;
+        if (!string.IsNullOrEmpty(alignment))
+        {
+            jsonPara.Formatting["Alignment"] = alignment;
+            jsonPara.Formatting["algin"] = alignment;
+        }
         if (pPr.Shading?.Fill != null) jsonPara.Formatting["Shading"] = pPr.Shading.Fill.Value;
         var direction = NormalizeDirectionToken(pPr.BiDi != null ? "rtl" : "ltr");
         if (!string.IsNullOrEmpty(direction)) jsonPara.Formatting["Direction"] = direction;

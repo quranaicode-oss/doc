@@ -808,13 +808,16 @@
     function showLoading() { $('#global-loader').css('display', 'flex'); }
     function hideLoading() { $('#global-loader').hide(); }
 
-    function normalizeAlignmentValue(value) {
+    function normalizeAlignmentValue(value, directionHint) {
         if (!value && value !== 0) return '';
         const normalized = value.toString().trim().toLowerCase();
         if (!normalized) return '';
-        if (normalized === 'both' || normalized === 'distribute') return 'justify';
         if (normalized === 'inherit') return '';
-        const allowed = ['left', 'right', 'center', 'justify', 'start', 'end'];
+        if (normalized === 'both' || normalized === 'distribute') return 'justify';
+        const direction = normalizeDirectionValue(directionHint) || 'ltr';
+        if (normalized === 'start') return direction === 'rtl' ? 'right' : 'left';
+        if (normalized === 'end') return direction === 'rtl' ? 'left' : 'right';
+        const allowed = ['left', 'right', 'center', 'justify'];
         if (allowed.includes(normalized)) return normalized;
         return normalized;
     }
@@ -828,11 +831,16 @@
 
     function normalizeFormattingObject(target) {
         if (!target || typeof target !== 'object') return;
-        const alignment = normalizeAlignmentValue(target.Alignment ?? target.algin ?? target.alignment);
+        const alignment = normalizeAlignmentValue(
+            target.Alignment ?? target.algin ?? target.alignment,
+            target.Direction ?? target.direction
+        );
         if (alignment) {
             target.Alignment = alignment;
+            target.algin = alignment;
         } else {
             delete target.Alignment;
+            delete target.algin;
         }
         const direction = normalizeDirectionValue(target.Direction ?? target.direction);
         if (direction) {
@@ -840,19 +848,55 @@
         } else {
             delete target.Direction;
         }
-        if (Object.prototype.hasOwnProperty.call(target, 'algin')) delete target.algin;
         if (Object.prototype.hasOwnProperty.call(target, 'alignment') && !target.Alignment) delete target.alignment;
         if (Object.prototype.hasOwnProperty.call(target, 'direction') && !target.Direction) delete target.direction;
     }
 
-    function resolveAlignment(source) {
-        if (!source) return '';
-        return normalizeAlignmentValue(source.Alignment ?? source.algin ?? source.alignment);
+    function resolveAlignment(directionFallback, ...sources) {
+        const fallbackDirection = normalizeDirectionValue(directionFallback) || 'ltr';
+        for (const source of sources) {
+            if (!source) continue;
+            if (typeof source === 'string') {
+                const normalized = normalizeAlignmentValue(source, fallbackDirection);
+                if (normalized) return normalized;
+                continue;
+            }
+            const directionHint = normalizeDirectionValue(source.Direction ?? source.direction);
+            const normalized = normalizeAlignmentValue(
+                source.Alignment ?? source.algin ?? source.alignment,
+                directionHint && directionHint !== 'inherit' ? directionHint : fallbackDirection
+            );
+            if (normalized) return normalized;
+        }
+        return '';
     }
 
     function resolveDirection(source) {
         if (!source) return '';
-        return normalizeDirectionValue(source.Direction ?? source.direction);
+        if (typeof source === 'string') return normalizeDirectionValue(source);
+        return normalizeDirectionValue(source.Direction ?? source.direction ?? source);
+    }
+
+    function resolveDirectionPreference(...sources) {
+        let inheritFound = false;
+        for (const source of sources) {
+            const direction = resolveDirection(source);
+            if (!direction) continue;
+            if (direction === 'inherit') {
+                inheritFound = true;
+                continue;
+            }
+            return direction;
+        }
+        return inheritFound ? 'inherit' : '';
+    }
+
+    const htmlEntityParser = document.createElement('textarea');
+
+    function decodeHtmlEntities(text) {
+        if (typeof text !== 'string') return '';
+        htmlEntityParser.innerHTML = text;
+        return htmlEntityParser.value;
     }
 
     function escapeHtml(text) {
@@ -978,7 +1022,8 @@
                         newRuns.push(run);
                         return;
                     }
-                    const parts = run.Text.split(/(FORMCHECKBOX)/).filter(p => p);
+                    const decodedText = decodeHtmlEntities(run.Text);
+                    const parts = decodedText.split(/(FORMCHECKBOX)/).filter(p => p);
                     parts.forEach(part => {
                         const newRun = JSON.parse(JSON.stringify(run));
                         newRun.Text = (part === 'FORMCHECKBOX') ? '☐' : part;
@@ -990,10 +1035,13 @@
             if (el.Type === "Paragraph") {
                 el.Content = processRuns(el.Content);
             } else if (el.Type === "Table") {
-                el.Content?.forEach(row => row.Cells?.forEach(cell => {
-                    cell.FormattedRuns = processRuns(cell.FormattedRuns);
-                    normalizeFormattingObject(cell);
-                }));
+                el.Content?.forEach(row => {
+                    normalizeFormattingObject(row);
+                    row.Cells?.forEach(cell => {
+                        cell.FormattedRuns = processRuns(cell.FormattedRuns);
+                        normalizeFormattingObject(cell);
+                    });
+                });
             }
         });
         return json;
@@ -1026,7 +1074,7 @@
         docContainer.css('direction', documentDirection);
         const formatRunText = (text) => {
             if (typeof text !== 'string') return '';
-            const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            const normalized = decodeHtmlEntities(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
             return normalized
                 .split('\n')
                 .map(line => escapeHtml(line).replace(/\t/g, '&emsp;').replace(/ /g, '&nbsp;'))
@@ -1064,8 +1112,12 @@
             let elementHtml = '';
             switch (element.Type) {
                 case "Paragraph": {
-                    const paragraphAlignment = resolveAlignment(element.Formatting);
-                    const paragraphDirection = resolveDirection(element.Formatting) || 'inherit';
+                    const paragraphDirectionPref = resolveDirectionPreference(element.Formatting, element);
+                    const paragraphDirectionEffective = (paragraphDirectionPref && paragraphDirectionPref !== 'inherit')
+                        ? paragraphDirectionPref
+                        : documentDirection;
+                    const paragraphAlignment = resolveAlignment(paragraphDirectionEffective, element.Formatting, element);
+                    const paragraphDirection = paragraphDirectionPref || 'inherit';
                     let style = `text-align: ${paragraphAlignment || 'inherit'}; direction: ${paragraphDirection};`;
                     if (element.Formatting?.Shading) style += `background-color: #${element.Formatting.Shading};`;
                     let content = (element.Content || []).map((item, index) => renderRun(item, element.ID, index)).join('');
@@ -1073,15 +1125,35 @@
                     break;
                 }
                 case "Table": {
-                    const tableDirection = resolveDirection(element) || resolveDirection(element.Borders) || 'inherit';
+                    const tableDirectionPref = resolveDirectionPreference(element, element.Borders);
+                    const tableDirectionEffective = (tableDirectionPref && tableDirectionPref !== 'inherit')
+                        ? tableDirectionPref
+                        : documentDirection;
+                    const tableDirection = tableDirectionPref || 'inherit';
                     let tableStyle = `width: 100%; border-collapse: collapse; table-layout: fixed; direction: ${tableDirection};`;
-                    
+
                     let tableBody = (element.Content || []).map((row, rIdx) => {
+                        const rowDirectionPref = resolveDirectionPreference(row);
+                        const rowDirectionEffective = (rowDirectionPref && rowDirectionPref !== 'inherit')
+                            ? rowDirectionPref
+                            : tableDirectionEffective;
                         let cellsHtml = (row.Cells || []).map((cell, cIdx) => {
                             if (cell.VerticalMerge === 'Continue') return '';
-                          const cellDirection = resolveDirection(cell) || 'inherit';
-                          const cellAlignment = resolveAlignment(cell) || 'inherit';
-                          let cellStyle = `direction:${cellDirection}; text-align:${cellAlignment} !important; vertical-align: middle; word-break: keep-all;`;
+                            const cellDirectionPref = resolveDirectionPreference(cell);
+                            const cellDirectionEffective = (cellDirectionPref && cellDirectionPref !== 'inherit')
+                                ? cellDirectionPref
+                                : rowDirectionEffective;
+                            const cellDirection = cellDirectionPref || 'inherit';
+                            const cellAlignment = resolveAlignment(
+                                cellDirectionEffective,
+                                cell,
+                                row,
+                                row?.Formatting,
+                                element,
+                                element.Formatting,
+                                element.Borders
+                            ) || 'inherit';
+                            let cellStyle = `direction:${cellDirection}; text-align:${cellAlignment} !important; vertical-align: middle; word-break: keep-all;`;
                             if (cell.TextRotation) {
                                 cellStyle += `writing-mode: vertical-rl; transform: rotate(180deg);`;
                             }
@@ -1168,13 +1240,48 @@
                         templateJson = preprocessTemplateData(templateJson);
 
                         let savedElements = savedData.documentElements ? upgradeJsonFormat({ json: { Elements: savedData.documentElements } }).json.Elements : [];
+                        if (savedElements && savedElements.length) {
+                            const normalizedSaved = preprocessTemplateData({ Direction: templateJson.Direction, Elements: savedElements });
+                            if (normalizedSaved?.Elements) {
+                                savedElements = normalizedSaved.Elements;
+                            }
+                        }
 
                         const finalElements = templateJson.Elements.map(templateEl => {
                             const savedEl = savedElements.find(s => s.ID === templateEl.ID);
                             if (savedEl) {
-                                if (templateEl.Type === "Paragraph" && savedEl.Content && savedEl.Content[0]) {
+                                if (savedEl.Formatting) {
+                                    templateEl.Formatting = Object.assign({}, templateEl.Formatting || {}, savedEl.Formatting);
+                                    normalizeFormattingObject(templateEl.Formatting);
+                                }
+                                if (savedEl.Direction) {
+                                    templateEl.Direction = savedEl.Direction;
+                                }
+                                if (savedEl.Alignment || savedEl.algin) {
+                                    const alignmentValue = savedEl.Alignment ?? savedEl.algin;
+                                    if (alignmentValue) {
+                                        templateEl.Alignment = alignmentValue;
+                                        templateEl.algin = alignmentValue;
+                                    }
+                                }
+                                normalizeFormattingObject(templateEl);
+
+                                if (templateEl.Type === "Paragraph" && savedEl.Content) {
+                                    let textValue = "";
+                                    if (Array.isArray(savedEl.Content)) {
+                                        const savedRun = savedEl.Content.find(item => item && typeof item.Text === 'string');
+                                        if (savedRun) {
+                                            textValue = savedRun.Text;
+                                        } else if (typeof savedEl.Content[0] === 'string') {
+                                            textValue = savedEl.Content[0];
+                                        }
+                                    } else if (savedEl.Content && typeof savedEl.Content === 'object' && typeof savedEl.Content.Text === 'string') {
+                                        textValue = savedEl.Content.Text;
+                                    } else if (typeof savedEl.Content === 'string') {
+                                        textValue = savedEl.Content;
+                                    }
                                     templateEl.Content = [{
-                                        Text: savedEl.Content[0].Text || "",
+                                        Text: textValue || "",
                                         Formatting: templateEl.Content?.[0]?.Formatting || {},
                                         FormattingValues: templateEl.Content?.[0]?.FormattingValues || {}
                                     }];
@@ -1186,12 +1293,37 @@
                                             templateRow.Cells.forEach((templateCell, cIdx) => {
                                                 const savedCell = savedRow.Cells[cIdx];
                                                 if (savedCell) {
-                                                    templateCell.Content = savedCell.Content || "";
-                                                    templateCell.FormattedRuns = [{
-                                                        Text: savedCell.Content || "",
-                                                        Formatting: templateCell.FormattedRuns?.[0]?.Formatting || {},
-                                                        FormattingValues: templateCell.FormattedRuns?.[0]?.FormattingValues || {}
-                                                    }];
+                                                    if (typeof savedCell.Content !== 'undefined') {
+                                                        templateCell.Content = savedCell.Content;
+                                                    }
+                                                    if (savedCell.FormattedRuns && savedCell.FormattedRuns.length) {
+                                                        templateCell.FormattedRuns = savedCell.FormattedRuns.map(run => JSON.parse(JSON.stringify(run)));
+                                                    } else {
+                                                        const savedText = Array.isArray(savedCell.Content)
+                                                            ? savedCell.Content.map(item => {
+                                                                if (typeof item === 'string') return item;
+                                                                if (item && typeof item.Text === 'string') return item.Text;
+                                                                return '';
+                                                            }).join('')
+                                                            : savedCell.Content || "";
+                                                        templateCell.FormattedRuns = [{
+                                                            Text: savedText,
+                                                            Formatting: templateCell.FormattedRuns?.[0]?.Formatting || {},
+                                                            FormattingValues: templateCell.FormattedRuns?.[0]?.FormattingValues || {}
+                                                        }];
+                                                    }
+                                                    if (savedCell.Borders) {
+                                                        templateCell.Borders = Object.assign({}, templateCell.Borders || {}, savedCell.Borders);
+                                                    }
+                                                    if (savedCell.Direction) {
+                                                        templateCell.Direction = savedCell.Direction;
+                                                    }
+                                                    if (savedCell.Alignment || savedCell.algin) {
+                                                        const alignmentValue = savedCell.Alignment ?? savedCell.algin;
+                                                        templateCell.Alignment = alignmentValue;
+                                                        templateCell.algin = alignmentValue;
+                                                    }
+                                                    normalizeFormattingObject(templateCell);
                                                 }
                                             });
                                         }
