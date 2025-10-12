@@ -1096,7 +1096,8 @@ private static string DetectDocumentDefaultDirection(MainDocumentPart mainPart)
     try
     {
         var stylesPart = mainPart.StyleDefinitionsPart;
-        var docDefaults = stylesPart?.Styles?.DocDefaults?.ParagraphPropertiesDefault?.ParagraphProperties;
+        var docDefaults = stylesPart?.Styles?.DocDefaults?.ParagraphPropertiesDefault?
+            .GetFirstChild<Wp.ParagraphProperties>();
         if (docDefaults != null)
         {
             if (docDefaults.BiDi != null) return "rtl";
