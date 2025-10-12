@@ -891,6 +891,68 @@
         return inheritFound ? 'inherit' : '';
     }
 
+    function normalizeBorderCssValue(value) {
+        if (!value && value !== 0) return '';
+        const normalized = value.toString().trim().toLowerCase();
+        if (!normalized || normalized === 'inherit') return '';
+        if (normalized === 'none' || normalized === 'nil') return 'none';
+        const styleMap = {
+            single: 'solid',
+            thick: 'solid',
+            double: 'double',
+            dashed: 'dashed',
+            dotted: 'dotted'
+        };
+        const cssStyle = styleMap[normalized] || normalized;
+        if (cssStyle === 'none') return 'none';
+        return `1px ${cssStyle} #000`;
+    }
+
+    function computeBorderStyles(borders, fallback = {}) {
+        const sides = ['Top', 'Right', 'Bottom', 'Left'];
+        const resolved = {};
+        const cssParts = [];
+        if (!borders || typeof borders !== 'object') {
+            borders = {};
+        }
+        sides.forEach(side => {
+            const normalized = normalizeBorderCssValue(borders?.[side]);
+            const fallbackValue = fallback[side];
+            const finalValue = normalized || fallbackValue || '';
+            resolved[side] = finalValue;
+            if (!finalValue) return;
+            const property = side.toLowerCase();
+            const css = finalValue === 'none'
+                ? `border-${property}: none;`
+                : `border-${property}: ${finalValue};`;
+            cssParts.push(css);
+        });
+        return { css: cssParts.join(' '), values: resolved };
+    }
+
+    function computeDominantTableDirection(table, fallbackDirection) {
+        const fallback = normalizeDirectionValue(fallbackDirection) || 'ltr';
+        if (!table || !Array.isArray(table.Content)) return fallback;
+        let rtlCount = 0;
+        let ltrCount = 0;
+        table.Content.forEach(row => {
+            const rowPref = resolveDirectionPreference(row);
+            const rowEffective = (rowPref && rowPref !== 'inherit') ? rowPref : fallback;
+            (row?.Cells || []).forEach(cell => {
+                if (cell?.VerticalMerge === 'Continue') return;
+                const cellPref = resolveDirectionPreference(cell);
+                let effective = (cellPref && cellPref !== 'inherit')
+                    ? cellPref
+                    : (rowPref && rowPref !== 'inherit') ? rowPref : fallback;
+                effective = normalizeDirectionValue(effective) || fallback;
+                if (effective === 'rtl') rtlCount++;
+                else ltrCount++;
+            });
+        });
+        if (rtlCount === ltrCount) return fallback;
+        return rtlCount > ltrCount ? 'rtl' : 'ltr';
+    }
+
     const htmlEntityParser = document.createElement('textarea');
 
     function decodeHtmlEntities(text) {
@@ -1125,25 +1187,27 @@
                     break;
                 }
                 case "Table": {
-                    const tableDirectionPref = resolveDirectionPreference(element, element.Borders);
-                    const tableDirectionEffective = (tableDirectionPref && tableDirectionPref !== 'inherit')
-                        ? tableDirectionPref
-                        : documentDirection;
-                    const tableDirection = tableDirectionPref || 'inherit';
-                    let tableStyle = `width: 100%; border-collapse: collapse; table-layout: fixed; direction: ${tableDirection};`;
+                    const explicitTableDirection = normalizeDirectionValue(element?.Borders?.Direction ?? element?.Direction);
+                    const tableDirectionFallback = explicitTableDirection || documentDirection;
+                    const tableDirectionEffective = computeDominantTableDirection(element, tableDirectionFallback) || tableDirectionFallback;
+                    const tableBorderStyles = computeBorderStyles(element.Borders);
+                    let tableStyle = `${tableBorderStyles.css} direction: ${tableDirectionEffective || documentDirection}; width: 100%; border-collapse: collapse; table-layout: fixed;`;
 
                     let tableBody = (element.Content || []).map((row, rIdx) => {
                         const rowDirectionPref = resolveDirectionPreference(row);
                         const rowDirectionEffective = (rowDirectionPref && rowDirectionPref !== 'inherit')
                             ? rowDirectionPref
-                            : tableDirectionEffective;
+                            : (tableDirectionEffective || documentDirection);
+                        const rowBorderStyles = computeBorderStyles(row?.Borders, tableBorderStyles.values);
+                        const rowStyle = `${rowBorderStyles.css} direction: ${rowDirectionEffective};`;
                         let cellsHtml = (row.Cells || []).map((cell, cIdx) => {
                             if (cell.VerticalMerge === 'Continue') return '';
                             const cellDirectionPref = resolveDirectionPreference(cell);
-                            const cellDirectionEffective = (cellDirectionPref && cellDirectionPref !== 'inherit')
+                            let cellDirectionEffective = (cellDirectionPref && cellDirectionPref !== 'inherit')
                                 ? cellDirectionPref
                                 : rowDirectionEffective;
-                            const cellDirection = cellDirectionPref || 'inherit';
+                            if (!cellDirectionEffective) cellDirectionEffective = tableDirectionEffective || documentDirection;
+                            const cellBorderStyles = computeBorderStyles(cell?.Borders, rowBorderStyles.values);
                             const cellAlignment = resolveAlignment(
                                 cellDirectionEffective,
                                 cell,
@@ -1152,20 +1216,34 @@
                                 element,
                                 element.Formatting,
                                 element.Borders
-                            ) || 'inherit';
-                            let cellStyle = `direction:${cellDirection}; text-align:${cellAlignment} !important; vertical-align: middle; word-break: keep-all;`;
+                            ) || (cellDirectionEffective === 'rtl' ? 'right' : 'left');
+                            const backgroundColor = cell.Borders?.Background;
+                            const backgroundStyle = (backgroundColor && backgroundColor !== 'auto' && backgroundColor !== 'inherit')
+                                ? `background-color: #${backgroundColor};`
+                                : '';
+                            const cellStyleParts = [
+                                `direction:${cellDirectionEffective};`,
+                                `text-align:${cellAlignment} !important;`,
+                                'vertical-align: middle;',
+                                'line-height: 1.3;',
+                                'word-break: break-word;',
+                                'white-space: normal;',
+                                'padding: 6px;',
+                                cellBorderStyles.css,
+                                backgroundStyle
+                            ];
                             if (cell.TextRotation) {
-                                cellStyle += `writing-mode: vertical-rl; transform: rotate(180deg);`;
+                                cellStyleParts.push('writing-mode: vertical-rl; transform: rotate(180deg);');
                             }
-                            if (cell.Borders?.Background && cell.Borders.Background !== 'auto' && cell.Borders.Background !== 'inherit') cellStyle += `background-color: #${cell.Borders.Background};`;
-                            ['Top', 'Bottom', 'Left', 'Right'].forEach(side => {
-                                const border = cell.Borders?.[side];
-                                if (border && border !== 'inherit' && border !== 'None' && border !== 'nil') cellStyle += `border-${side.toLowerCase()}: 1px ${border.replace('single', 'solid')};`;
-                            });
+                            const cellStyle = cellStyleParts.filter(Boolean).join(' ');
                             let cellContent = (cell.FormattedRuns || []).map((run, runIdx) => renderRun(run, `${element.ID}-${rIdx}-${cIdx}`, runIdx)).join('');
+                            if (!cellContent && typeof cell.Content === 'string') {
+                                cellContent = formatRunText(cell.Content);
+                            }
                             return `<td class="editable-cell" ${cell.GridSpan > 1 ? `colspan="${cell.GridSpan}"` : ''} ${cell.rowSpan > 1 ? `rowspan="${cell.rowSpan}"` : ''} style="${cellStyle}" data-element-id="${element.ID}" data-row-index="${rIdx}" data-cell-index="${cIdx}" contenteditable="true">${cellContent || '&nbsp;'}</td>`;
                         }).join('');
-                        return `<tr>${cellsHtml}</tr>`;
+                        const rowStyleString = rowStyle.trim() || 'border: inherit;';
+                        return `<tr style="${rowStyleString}">${cellsHtml}</tr>`;
                     }).join('');
                     elementHtml = `<table class="modern-table" style="${tableStyle}"><tbody>${tableBody}</tbody></table>`;
                     break;
