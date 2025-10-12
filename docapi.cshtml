@@ -68,7 +68,7 @@
     public class JsonCheckbox { public string Type { get; set; } = "Checkbox"; public bool IsChecked { get; set; } public string Content { get; set; } }
     public class JsonTable { public int ID { get; set; } public string Type { get; set; } = "Table"; public string StructureKey { get; set; } public List<JsonTableRow> Content { get; set; } = new List<JsonTableRow>(); public Dictionary<string, string> Borders { get; set; } = new Dictionary<string, string>(); }
     public class JsonTableRow { public List<JsonTableCell> Cells { get; set; } = new List<JsonTableCell>(); public Dictionary<string, string> Borders { get; set; } = new Dictionary<string, string>(); }
-    public class JsonTableCell { public string Content { get; set; } public int GridSpan { get; set; } = 1; public string VerticalMerge { get; set; } public List<JsonRun> FormattedRuns { get; set; } = new List<JsonRun>(); public List<JsonCheckbox> Checkboxes { get; set; } = new List<JsonCheckbox>(); public Dictionary<string, string> Borders { get; set; } = new Dictionary<string, string>(); public int? rowSpan { get; set; } public string Direction { get; set; } public string Alignment { get; set; } public string TextRotation { get; set; }}
+    public class JsonTableCell { public string Content { get; set; } public int GridSpan { get; set; } = 1; public string VerticalMerge { get; set; } public List<JsonRun> FormattedRuns { get; set; } = new List<JsonRun>(); public List<JsonCheckbox> Checkboxes { get; set; } = new List<JsonCheckbox>(); public Dictionary<string, string> Borders { get; set; } = new Dictionary<string, string>(); public int? rowSpan { get; set; } public string Direction { get; set; } public string Alignment { get; set; } public string TextRotation { get; set; } public string algin { get => Alignment; set => Alignment = value; }}
     public class JsonImage { public int ID { get; set; } public string Type { get; set; } = "Image"; public string StructureKey { get; set; } public string Content { get; set; } }
 public static readonly Regex VersionPattern = new Regex(@"^(.+?)(?:\s*\(Rev\s?(\d+)\))?$", RegexOptions.IgnoreCase);
           public static string GetVersionedPath(string basePath, int? version)
@@ -344,7 +344,7 @@ public static object ConvertDocxToJson(string filePath, int? version)
         }
 
         var documentElements = new List<object>();
-        string documentDirection = "LTR";
+        string documentDirection = "ltr";
         int elementIdCounter = 0;
 
         using (WordprocessingDocument wordDoc = WordprocessingDocument.Open(pathToRead, false))
@@ -524,25 +524,42 @@ private static void ParseElementsRecursive(IEnumerable<OpenXmlElement> elements,
             .Select(r => r.RunProperties != null ? (Wp.RunProperties)r.RunProperties.CloneNode(true) : null)
             .ToList();
 
-        if (jsonPara.Formatting != null && jsonPara.Formatting.TryGetValue("Direction", out object dirValue))
+        object dirValue = null;
+        if (jsonPara.Formatting != null)
         {
-            var direction = dirValue?.ToString();
-            if (!string.IsNullOrWhiteSpace(direction))
+            jsonPara.Formatting.TryGetValue("Direction", out dirValue);
+            if (dirValue == null)
             {
-                if (direction.Equals("RTL", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (pPr.BiDi == null) pPr.Append(new Wp.BiDi());
-                }
-                else if (!direction.Equals("inherit", StringComparison.OrdinalIgnoreCase))
-                {
-                    pPr.BiDi?.Remove();
-                }
+                jsonPara.Formatting.TryGetValue("direction", out dirValue);
             }
         }
 
-        if (jsonPara.Formatting.TryGetValue("Alignment", out object alignValue))
+        var normalizedDirection = NormalizeDirectionToken(dirValue?.ToString());
+        if (!string.IsNullOrEmpty(normalizedDirection))
         {
-            var targetValue = MapAlignmentToJustification(alignValue?.ToString());
+            if (normalizedDirection == "rtl")
+            {
+                if (pPr.BiDi == null) pPr.Append(new Wp.BiDi());
+            }
+            else if (normalizedDirection == "ltr" || normalizedDirection == "inherit")
+            {
+                pPr.BiDi?.Remove();
+            }
+        }
+
+        object alignValue = null;
+        if (jsonPara.Formatting != null)
+        {
+            jsonPara.Formatting.TryGetValue("Alignment", out alignValue);
+            if (alignValue == null)
+            {
+                jsonPara.Formatting.TryGetValue("algin", out alignValue);
+            }
+        }
+
+        if (alignValue != null)
+        {
+            var targetValue = MapAlignmentToJustification(alignValue.ToString());
             if (targetValue.HasValue)
             {
                 var alignment = pPr.Justification;
@@ -825,13 +842,19 @@ private static void ApplyParagraphPayloadsToCell(Wp.TableCell docxCell, List<Wp.
         var payloadRuns = paragraphPayloads[paragraphIndex] ?? new List<JsonRun>();
 
         var jsonParagraph = new JsonParagraph();
-        if (!string.IsNullOrEmpty(jsonCell?.Direction))
+        if (jsonCell != null)
         {
-            jsonParagraph.Formatting["Direction"] = jsonCell.Direction;
-        }
-        if (!string.IsNullOrEmpty(jsonCell?.Alignment))
-        {
-            jsonParagraph.Formatting["Alignment"] = jsonCell.Alignment;
+            var cellDirection = NormalizeDirectionToken(jsonCell.Direction);
+            if (!string.IsNullOrEmpty(cellDirection))
+            {
+                jsonParagraph.Formatting["Direction"] = cellDirection;
+            }
+
+            var cellAlignment = NormalizeAlignmentToken(jsonCell.Alignment);
+            if (!string.IsNullOrEmpty(cellAlignment))
+            {
+                jsonParagraph.Formatting["Alignment"] = cellAlignment;
+            }
         }
 
         jsonParagraph.Content = payloadRuns.Cast<object>().ToList();
@@ -1022,10 +1045,51 @@ private static Wp.RunProperties ResolveRunProperties(List<Wp.RunProperties> temp
     return null;
 }
           
-          private static string GetParagraphAlignment(Wp.Paragraph para, MainDocumentPart mainPart)
+private static string NormalizeAlignmentToken(string alignment)
+{
+    if (string.IsNullOrWhiteSpace(alignment)) return null;
+
+    var normalized = alignment.Trim().ToLowerInvariant();
+
+    switch (normalized)
+    {
+        case "both":
+        case "distribute":
+            return "justify";
+        case "center":
+        case "justify":
+        case "left":
+        case "right":
+        case "start":
+        case "end":
+            return normalized;
+        case "inherit":
+            return null;
+        default:
+            return normalized;
+    }
+}
+
+private static string NormalizeDirectionToken(string direction)
+{
+    if (string.IsNullOrWhiteSpace(direction)) return null;
+
+    var normalized = direction.Trim().ToLowerInvariant();
+    switch (normalized)
+    {
+        case "rtl":
+        case "ltr":
+        case "inherit":
+            return normalized;
+        default:
+            return null;
+    }
+}
+
+private static string GetParagraphAlignment(Wp.Paragraph para, MainDocumentPart mainPart)
 {
     var pPr = para.ParagraphProperties;
-    
+
     if (pPr?.Justification?.Val != null)
     {
         var alignment = pPr.Justification.Val.Value;
@@ -1112,7 +1176,7 @@ private static Wp.RunProperties ResolveRunProperties(List<Wp.RunProperties> temp
     {
         return "right";
     }
-    
+
     return "left";
 }
 private static string ExtractRunTextWithBreaks(Wp.Run run)
@@ -1173,9 +1237,11 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
     if (pPr != null)
     {
         // ... (Formatting logic remains the same)
-        jsonPara.Formatting["Alignment"] = GetParagraphAlignment(para, mainPart);
+        var alignment = NormalizeAlignmentToken(GetParagraphAlignment(para, mainPart));
+        if (!string.IsNullOrEmpty(alignment)) jsonPara.Formatting["Alignment"] = alignment;
         if (pPr.Shading?.Fill != null) jsonPara.Formatting["Shading"] = pPr.Shading.Fill.Value;
-        jsonPara.Formatting["Direction"] = pPr.BiDi != null ? "RTL" : "LTR";
+        var direction = NormalizeDirectionToken(pPr.BiDi != null ? "rtl" : "ltr");
+        if (!string.IsNullOrEmpty(direction)) jsonPara.Formatting["Direction"] = direction;
     }
     var runs = para.Elements<Wp.Run>().ToList();
     for (int i = 0; i < runs.Count; i++)
@@ -1236,6 +1302,8 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
     {
         var jsonTable = new JsonTable { ID = elementId, StructureKey = structureKey };
         var tblProps = table.GetFirstChild<Wp.TableProperties>();
+        var documentSettings = mainPart.DocumentSettingsPart?.Settings;
+        var isDocumentRtl = documentSettings?.GetFirstChild<Wp.BiDi>() != null;
         if (tblProps != null)
         {
             var borders = tblProps.GetFirstChild<Wp.TableBorders>();
@@ -1248,7 +1316,7 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                 jsonTable.Borders["InsideH"] = GetBorderStyle(borders.InsideHorizontalBorder) ?? "inherit";
                 jsonTable.Borders["InsideV"] = GetBorderStyle(borders.InsideVerticalBorder) ?? "inherit";
             }
-            jsonTable.Borders["Direction"] = tblProps.GetFirstChild<Wp.BiDiVisual>() != null ? "RTL" : "LTR";
+            jsonTable.Borders["Direction"] = tblProps.GetFirstChild<Wp.BiDiVisual>() != null ? "rtl" : "ltr";
         }
         var tableData = new List<JsonTableRow>();
         int rowIndex = 0;
@@ -1262,15 +1330,14 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                 var firstPara = cell.Elements<Wp.Paragraph>().FirstOrDefault();
                 if (firstPara != null)
                 {
-                    jsonCell.Direction = firstPara.ParagraphProperties?.BiDi != null ? "RTL" : "LTR";
-                    jsonCell.Alignment = GetParagraphAlignment(firstPara, mainPart);
+                    jsonCell.Direction = NormalizeDirectionToken(firstPara.ParagraphProperties?.BiDi != null ? "rtl" : "ltr")
+                        ?? (isDocumentRtl ? "rtl" : "ltr");
+                    jsonCell.Alignment = NormalizeAlignmentToken(GetParagraphAlignment(firstPara, mainPart));
                 }
                 else
                 {
-                    var documentSettings = mainPart.DocumentSettingsPart?.Settings;
-                    var isDocumentRtl = documentSettings?.GetFirstChild<Wp.BiDi>() != null;
-                    jsonCell.Direction = isDocumentRtl ? "RTL" : "LTR";
-                    jsonCell.Alignment = isDocumentRtl ? "right" : "left";
+                    jsonCell.Direction = isDocumentRtl ? "rtl" : "ltr";
+                    jsonCell.Alignment = NormalizeAlignmentToken(isDocumentRtl ? "right" : "left");
                 }
 
                 var paragraphs = cell.Elements<Wp.Paragraph>().ToList();
@@ -1352,21 +1419,21 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
             var documentSettings = wordDoc.MainDocumentPart.DocumentSettingsPart?.Settings;
             if (documentSettings?.GetFirstChild<Wp.BiDi>() != null)
             {
-                return "RTL";
+                return "rtl";
             }
 
             var body = wordDoc.MainDocumentPart.Document.Body;
             var firstPara = body.Elements<Wp.Paragraph>().FirstOrDefault();
             if (firstPara?.ParagraphProperties?.BiDi != null)
             {
-                return "RTL";
+                return "rtl";
             }
 
-            return "LTR";
+            return "ltr";
         }
         catch
         {
-            return "LTR";
+            return "ltr";
         }
     }
 
