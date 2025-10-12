@@ -1699,35 +1699,23 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
         }
 
         string finalTableDirection;
-        if (tableDirection == "rtl" && ltrCellCount > rtlCellCount)
-        {
-            finalTableDirection = "ltr";
-        }
-        else if (tableDirection == "ltr" && rtlCellCount > ltrCellCount)
+        if (rtlCellCount > ltrCellCount)
         {
             finalTableDirection = "rtl";
         }
-        else if (tableDirection == "inherit")
+        else if (ltrCellCount > rtlCellCount)
         {
-            if (rtlCellCount > ltrCellCount)
-            {
-                finalTableDirection = "rtl";
-            }
-            else if (ltrCellCount > rtlCellCount)
-            {
-                finalTableDirection = "ltr";
-            }
-            else
-            {
-                finalTableDirection = normalizedFallback;
-            }
+            finalTableDirection = "ltr";
         }
-        else
+        else if (tableDirection == "rtl" || tableDirection == "ltr")
         {
             finalTableDirection = tableDirection;
         }
-
-        if (string.IsNullOrEmpty(finalTableDirection))
+        else if (tableDirection == "inherit")
+        {
+            finalTableDirection = normalizedFallback;
+        }
+        else
         {
             finalTableDirection = normalizedFallback;
         }

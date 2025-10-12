@@ -1187,19 +1187,17 @@
                     break;
                 }
                 case "Table": {
-                    const tableDirectionPref = resolveDirectionPreference(element, element.Borders);
-                    let tableDirectionEffective = (tableDirectionPref && tableDirectionPref !== 'inherit')
-                        ? tableDirectionPref
-                        : documentDirection;
-                    tableDirectionEffective = computeDominantTableDirection(element, tableDirectionEffective);
+                    const explicitTableDirection = normalizeDirectionValue(element?.Borders?.Direction ?? element?.Direction);
+                    const tableDirectionFallback = explicitTableDirection || documentDirection;
+                    const tableDirectionEffective = computeDominantTableDirection(element, tableDirectionFallback) || tableDirectionFallback;
                     const tableBorderStyles = computeBorderStyles(element.Borders);
-                    let tableStyle = `${tableBorderStyles.css} direction: ${tableDirectionEffective}; width: 100%; border-collapse: collapse; table-layout: fixed;`;
+                    let tableStyle = `${tableBorderStyles.css} direction: ${tableDirectionEffective || documentDirection}; width: 100%; border-collapse: collapse; table-layout: fixed;`;
 
                     let tableBody = (element.Content || []).map((row, rIdx) => {
                         const rowDirectionPref = resolveDirectionPreference(row);
                         const rowDirectionEffective = (rowDirectionPref && rowDirectionPref !== 'inherit')
                             ? rowDirectionPref
-                            : tableDirectionEffective;
+                            : (tableDirectionEffective || documentDirection);
                         const rowBorderStyles = computeBorderStyles(row?.Borders, tableBorderStyles.values);
                         const rowStyle = `${rowBorderStyles.css} direction: ${rowDirectionEffective};`;
                         let cellsHtml = (row.Cells || []).map((cell, cIdx) => {
@@ -1208,7 +1206,7 @@
                             let cellDirectionEffective = (cellDirectionPref && cellDirectionPref !== 'inherit')
                                 ? cellDirectionPref
                                 : rowDirectionEffective;
-                            if (!cellDirectionEffective) cellDirectionEffective = tableDirectionEffective;
+                            if (!cellDirectionEffective) cellDirectionEffective = tableDirectionEffective || documentDirection;
                             const cellBorderStyles = computeBorderStyles(cell?.Borders, rowBorderStyles.values);
                             const cellAlignment = resolveAlignment(
                                 cellDirectionEffective,
@@ -1239,6 +1237,9 @@
                             }
                             const cellStyle = cellStyleParts.filter(Boolean).join(' ');
                             let cellContent = (cell.FormattedRuns || []).map((run, runIdx) => renderRun(run, `${element.ID}-${rIdx}-${cIdx}`, runIdx)).join('');
+                            if (!cellContent && typeof cell.Content === 'string') {
+                                cellContent = formatRunText(cell.Content);
+                            }
                             return `<td class="editable-cell" ${cell.GridSpan > 1 ? `colspan="${cell.GridSpan}"` : ''} ${cell.rowSpan > 1 ? `rowspan="${cell.rowSpan}"` : ''} style="${cellStyle}" data-element-id="${element.ID}" data-row-index="${rIdx}" data-cell-index="${cIdx}" contenteditable="true">${cellContent || '&nbsp;'}</td>`;
                         }).join('');
                         const rowStyleString = rowStyle.trim() || 'border: inherit;';
