@@ -1180,6 +1180,18 @@ private static string ResolveParagraphDirection(Wp.Paragraph paragraph, MainDocu
     return preferInherit ? "inherit" : fallback;
 }
 
+private static string ResolveTableDirection(Wp.TableProperties tableProperties)
+{
+    if (tableProperties == null) return "inherit";
+
+    if (tableProperties.GetFirstChild<Wp.BiDiVisual>() != null)
+    {
+        return "rtl";
+    }
+
+    return "inherit";
+}
+
 private static bool IsParagraphExplicitlyRtl(Wp.Paragraph paragraph, MainDocumentPart mainPart)
 {
     var pPr = paragraph?.ParagraphProperties;
@@ -1580,6 +1592,8 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
         var tblProps = table.GetFirstChild<Wp.TableProperties>();
         var normalizedFallback = NormalizeDirectionToken(fallbackDirection) ?? "ltr";
         var isDocumentRtl = normalizedFallback == "rtl";
+        var tableDirection = ResolveTableDirection(tblProps);
+        var tableIsRtl = tableDirection == "rtl" || (tableDirection == "inherit" && isDocumentRtl);
         if (tblProps != null)
         {
             var borders = tblProps.GetFirstChild<Wp.TableBorders>();
@@ -1592,22 +1606,8 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                 jsonTable.Borders["InsideH"] = GetBorderStyle(borders.InsideHorizontalBorder) ?? "inherit";
                 jsonTable.Borders["InsideV"] = GetBorderStyle(borders.InsideVerticalBorder) ?? "inherit";
             }
-            string tableDirection = "inherit";
-            var tableDirVal = tblProps.GetFirstChild<Wp.TableDirection>()?.Val?.Value;
-            if (tableDirVal == Wp.TableDirectionValues.RightToLeft)
-            {
-                tableDirection = "rtl";
-            }
-            else if (tableDirVal == Wp.TableDirectionValues.LeftToRight)
-            {
-                tableDirection = "ltr";
-            }
-            else if (tblProps.GetFirstChild<Wp.BiDiVisual>() != null)
-            {
-                tableDirection = "rtl";
-            }
-            jsonTable.Borders["Direction"] = tableDirection;
         }
+        jsonTable.Borders["Direction"] = tableDirection;
         var tableData = new List<JsonTableRow>();
         int rowIndex = 0;
         foreach (var row in table.Elements<Wp.TableRow>())
@@ -1621,12 +1621,21 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                 if (firstPara != null)
                 {
                     jsonCell.Direction = ResolveParagraphDirection(firstPara, mainPart, normalizedFallback, preferInherit: true);
+                    if (jsonCell.Direction == "inherit" && tableDirection != "inherit")
+                    {
+                        jsonCell.Direction = tableDirection;
+                    }
                     jsonCell.Alignment = NormalizeAlignmentToken(GetParagraphAlignment(firstPara, mainPart));
                 }
                 else
                 {
-                    jsonCell.Direction = "inherit";
-                    jsonCell.Alignment = NormalizeAlignmentToken(isDocumentRtl ? "right" : "left");
+                    jsonCell.Direction = tableDirection == "inherit" ? "inherit" : tableDirection;
+                    jsonCell.Alignment = NormalizeAlignmentToken(tableIsRtl ? "right" : "left");
+                }
+
+                if (string.IsNullOrEmpty(jsonCell.Alignment))
+                {
+                    jsonCell.Alignment = NormalizeAlignmentToken(tableIsRtl ? "right" : "left");
                 }
 
                 var paragraphs = cell.Elements<Wp.Paragraph>().ToList();
@@ -1666,6 +1675,10 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                     jsonCell.Borders["Left"] = GetBorderStyle(cellBorders?.LeftBorder) ?? "inherit";
                     jsonCell.Borders["Right"] = GetBorderStyle(cellBorders?.RightBorder) ?? "inherit";
                     jsonCell.Borders["Background"] = cellProps.Shading?.Fill ?? "inherit";
+                }
+                if (jsonCell.Direction == "inherit" && tableDirection != "inherit")
+                {
+                    jsonCell.Direction = tableDirection;
                 }
                 jsonRow.Cells.Add(jsonCell);
                 cellIndex++;
