@@ -1195,24 +1195,72 @@ function escapeHtml(text) {
     function simplifyJsonForSave() {
         if (!documentData.json) return JSON.stringify({ Elements: [] });
         const payload = JSON.parse(JSON.stringify(documentData.json));
+
+        const allowedElementKeys = {
+            Paragraph: new Set(['ID', 'Type', 'Content', 'Formatting', 'StructureKey']),
+            Table: new Set(['ID', 'Type', 'Content', 'StructureKey'])
+        };
+
+        const allowedFormattingKeys = new Set(['Alignment', 'Direction', 'Shading']);
+        const allowedCellKeys = new Set(['Content', 'Alignment', 'Direction', 'TextRotation', 'GridSpan', 'rowSpan', 'VerticalMerge']);
+        const allowedRowKeys = new Set(['Cells']);
+
         payload.Elements.forEach(element => {
             if (element.Type === "Paragraph") {
                 if (element.Content && Array.isArray(element.Content)) {
-                    element.Content = [{ Text: element.Content.map(run => run.Text || "").join('').trim() }];
+                    const combinedText = element.Content.map(run => run?.Text || "").join('').trim();
+                    element.Content = [{ Text: combinedText }];
+                }
+
+                if (element.Formatting && typeof element.Formatting === 'object') {
+                    const cleanedFormatting = {};
+                    Object.keys(element.Formatting).forEach(key => {
+                        if (allowedFormattingKeys.has(key) && element.Formatting[key] !== undefined && element.Formatting[key] !== null && element.Formatting[key] !== '') {
+                            cleanedFormatting[key] = element.Formatting[key];
+                        }
+                    });
+                    if (Object.keys(cleanedFormatting).length > 0) {
+                        element.Formatting = cleanedFormatting;
+                    } else {
+                        delete element.Formatting;
+                    }
                 }
             } else if (element.Type === "Table") {
                 element.Content?.forEach(row => {
-                    row.Cells?.forEach(cell => {
-                        cell.Content = (cell.FormattedRuns || []).map(r => r.Text || "").join('').trim();
-                        delete cell.FormattedRuns;
-                        Object.keys(cell).forEach(key => {
-                            if (key !== 'ID' && key !== 'Content') delete cell[key];
+                    if (row && Array.isArray(row.Cells)) {
+                        row.Cells.forEach(cell => {
+                            if (!cell) return;
+                            const fromRuns = (cell.FormattedRuns || []).map(r => r?.Text || "").join('');
+                            const combinedText = (fromRuns || cell.Content || "").trim();
+                            cell.Content = combinedText;
+                            delete cell.FormattedRuns;
+
+                            Object.keys(cell).forEach(key => {
+                                if (!allowedCellKeys.has(key)) {
+                                    delete cell[key];
+                                }
+                            });
+                            if (!cell.Alignment) delete cell.Alignment;
+                            if (!cell.Direction) delete cell.Direction;
+                            if (!cell.TextRotation) delete cell.TextRotation;
+                            if (!cell.GridSpan || cell.GridSpan === 1) delete cell.GridSpan;
+                            if (!cell.rowSpan || cell.rowSpan === 1) delete cell.rowSpan;
+                            if (!cell.VerticalMerge) delete cell.VerticalMerge;
                         });
-                    });
+                    }
+                    if (row && typeof row === 'object') {
+                        Object.keys(row).forEach(key => {
+                            if (!allowedRowKeys.has(key)) delete row[key];
+                        });
+                    }
                 });
             }
+
+            const keepKeys = allowedElementKeys[element.Type] || new Set(['ID', 'Type', 'Content', 'StructureKey']);
             Object.keys(element).forEach(key => {
-                if (key !== 'ID' && key !== 'Type' && key !== 'Content') delete element[key];
+                if (!keepKeys.has(key)) {
+                    delete element[key];
+                }
             });
         });
         return JSON.stringify(payload, null, 2);
