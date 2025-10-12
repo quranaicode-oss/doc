@@ -1607,7 +1607,6 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                 jsonTable.Borders["InsideV"] = GetBorderStyle(borders.InsideVerticalBorder) ?? "inherit";
             }
         }
-        jsonTable.Borders["Direction"] = tableDirection;
         var tableData = new List<JsonTableRow>();
         int rowIndex = 0;
         foreach (var row in table.Elements<Wp.TableRow>())
@@ -1630,12 +1629,7 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                 else
                 {
                     jsonCell.Direction = tableDirection == "inherit" ? "inherit" : tableDirection;
-                    jsonCell.Alignment = NormalizeAlignmentToken(tableIsRtl ? "right" : "left");
-                }
-
-                if (string.IsNullOrEmpty(jsonCell.Alignment))
-                {
-                    jsonCell.Alignment = NormalizeAlignmentToken(tableIsRtl ? "right" : "left");
+                    jsonCell.Alignment = null;
                 }
 
                 var paragraphs = cell.Elements<Wp.Paragraph>().ToList();
@@ -1676,16 +1670,89 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                     jsonCell.Borders["Right"] = GetBorderStyle(cellBorders?.RightBorder) ?? "inherit";
                     jsonCell.Borders["Background"] = cellProps.Shading?.Fill ?? "inherit";
                 }
-                if (jsonCell.Direction == "inherit" && tableDirection != "inherit")
-                {
-                    jsonCell.Direction = tableDirection;
-                }
                 jsonRow.Cells.Add(jsonCell);
                 cellIndex++;
             }
             tableData.Add(jsonRow);
             rowIndex++;
         }
+        int rtlCellCount = 0;
+        int ltrCellCount = 0;
+        foreach (var row in tableData)
+        {
+            foreach (var cell in row.Cells)
+            {
+                var normalizedCellDirection = NormalizeDirectionToken(cell.Direction);
+                if (string.IsNullOrEmpty(normalizedCellDirection) || normalizedCellDirection == "inherit")
+                {
+                    normalizedCellDirection = tableIsRtl ? "rtl" : "ltr";
+                }
+                if (normalizedCellDirection == "rtl")
+                {
+                    rtlCellCount++;
+                }
+                else if (normalizedCellDirection == "ltr")
+                {
+                    ltrCellCount++;
+                }
+            }
+        }
+
+        string finalTableDirection;
+        if (tableDirection == "rtl" && ltrCellCount > rtlCellCount)
+        {
+            finalTableDirection = "ltr";
+        }
+        else if (tableDirection == "ltr" && rtlCellCount > ltrCellCount)
+        {
+            finalTableDirection = "rtl";
+        }
+        else if (tableDirection == "inherit")
+        {
+            if (rtlCellCount > ltrCellCount)
+            {
+                finalTableDirection = "rtl";
+            }
+            else if (ltrCellCount > rtlCellCount)
+            {
+                finalTableDirection = "ltr";
+            }
+            else
+            {
+                finalTableDirection = normalizedFallback;
+            }
+        }
+        else
+        {
+            finalTableDirection = tableDirection;
+        }
+
+        if (string.IsNullOrEmpty(finalTableDirection))
+        {
+            finalTableDirection = normalizedFallback;
+        }
+
+        var effectiveTableDirection = NormalizeDirectionToken(finalTableDirection) ?? "ltr";
+        var defaultAlignment = NormalizeAlignmentToken(effectiveTableDirection == "rtl" ? "right" : "left");
+
+        foreach (var row in tableData)
+        {
+            foreach (var cell in row.Cells)
+            {
+                var normalizedCellDirection = NormalizeDirectionToken(cell.Direction);
+                if (string.IsNullOrEmpty(normalizedCellDirection) || normalizedCellDirection == "inherit")
+                {
+                    cell.Direction = effectiveTableDirection;
+                }
+
+                if (string.IsNullOrEmpty(cell.Alignment))
+                {
+                    cell.Alignment = defaultAlignment;
+                }
+            }
+        }
+
+        jsonTable.Borders["Direction"] = effectiveTableDirection;
         jsonTable.Content = tableData;
         CalculateRowSpans(jsonTable);
         return jsonTable;
