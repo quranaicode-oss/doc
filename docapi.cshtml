@@ -1142,6 +1142,12 @@ private static string DetermineDocumentDirection(WordprocessingDocument wordDoc,
 
         foreach (var paragraph in paragraphs)
         {
+            var plainText = ExtractParagraphPlainText(paragraph);
+            if (string.IsNullOrWhiteSpace(plainText))
+            {
+                continue;
+            }
+
             var resolved = ResolveParagraphDirection(paragraph, mainPart, fallback);
             if (resolved == "rtl") rtlCount++;
             else ltrCount++;
@@ -1160,15 +1166,18 @@ private static string DetermineDocumentDirection(WordprocessingDocument wordDoc,
     }
 }
 
-private static string ResolveParagraphDirection(Wp.Paragraph paragraph, MainDocumentPart mainPart, string fallbackDirection)
+private static string ResolveParagraphDirection(Wp.Paragraph paragraph, MainDocumentPart mainPart, string fallbackDirection, bool preferInherit = false)
 {
     var fallback = NormalizeDirectionToken(fallbackDirection) ?? "ltr";
-    if (paragraph == null) return fallback;
+    if (paragraph == null) return preferInherit ? "inherit" : fallback;
 
     if (IsParagraphExplicitlyRtl(paragraph, mainPart)) return "rtl";
     if (IsParagraphExplicitlyLtr(paragraph, mainPart)) return "ltr";
 
-    return fallback;
+    var inferred = InferDirectionFromParagraphText(paragraph);
+    if (!string.IsNullOrEmpty(inferred)) return inferred;
+
+    return preferInherit ? "inherit" : fallback;
 }
 
 private static bool IsParagraphExplicitlyRtl(Wp.Paragraph paragraph, MainDocumentPart mainPart)
@@ -1215,6 +1224,84 @@ private static bool IsParagraphExplicitlyLtr(Wp.Paragraph paragraph, MainDocumen
     }
 
     return false;
+}
+
+private static string InferDirectionFromParagraphText(Wp.Paragraph paragraph)
+{
+    var text = ExtractParagraphPlainText(paragraph);
+    return InferDirectionFromTextContent(text);
+}
+
+private static string ExtractParagraphPlainText(Wp.Paragraph paragraph)
+{
+    if (paragraph == null) return string.Empty;
+
+    var builder = new StringBuilder();
+    foreach (var text in paragraph.Descendants<Wp.Text>())
+    {
+        if (!string.IsNullOrEmpty(text?.Text))
+        {
+            builder.Append(text.Text);
+        }
+    }
+
+    return builder.ToString();
+}
+
+private static string InferDirectionFromTextContent(string text)
+{
+    if (string.IsNullOrWhiteSpace(text)) return null;
+
+    int rtlCount = 0;
+    int ltrCount = 0;
+
+    foreach (var ch in text)
+    {
+        var bidiCategory = CharUnicodeInfo.GetBidiCategory(ch);
+        switch (bidiCategory)
+        {
+            case BidiCategory.RightToLeft:
+            case BidiCategory.RightToLeftArabic:
+            case BidiCategory.RightToLeftEmbedding:
+            case BidiCategory.RightToLeftOverride:
+            case BidiCategory.ArabicLetter:
+            case BidiCategory.ArabicNumber:
+                rtlCount++;
+                break;
+            case BidiCategory.LeftToRight:
+            case BidiCategory.LeftToRightEmbedding:
+            case BidiCategory.LeftToRightOverride:
+            case BidiCategory.EuropeanNumber:
+            case BidiCategory.EuropeanNumberSeparator:
+            case BidiCategory.EuropeanNumberTerminator:
+            case BidiCategory.OtherNumber:
+                ltrCount++;
+                break;
+            default:
+                if (char.IsLetter(ch) && !IsStrongRtlCharacter(ch))
+                {
+                    ltrCount++;
+                }
+                else if (char.IsDigit(ch) && !IsStrongRtlCharacter(ch))
+                {
+                    ltrCount++;
+                }
+                break;
+        }
+    }
+
+    if (rtlCount == 0 && ltrCount == 0) return null;
+    if (rtlCount == ltrCount) return null;
+
+    return rtlCount > ltrCount ? "rtl" : "ltr";
+}
+
+private static bool IsStrongRtlCharacter(char ch)
+{
+    var code = (int)ch;
+    return (code >= 0x0590 && code <= 0x08FF)
+        || (code >= 0xFB1D && code <= 0xFDFF)
+        || (code >= 0xFE70 && code <= 0xFEFC);
 }
 
 private static bool IsStyleChainRtl(string styleId, MainDocumentPart mainPart)
@@ -1437,7 +1524,7 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
             jsonPara.Formatting["algin"] = alignment;
         }
         if (pPr.Shading?.Fill != null) jsonPara.Formatting["Shading"] = pPr.Shading.Fill.Value;
-        var direction = ResolveParagraphDirection(para, mainPart, fallbackDirection);
+        var direction = ResolveParagraphDirection(para, mainPart, fallbackDirection, preferInherit: true);
         if (!string.IsNullOrEmpty(direction)) jsonPara.Formatting["Direction"] = direction;
     }
     var runs = para.Elements<Wp.Run>().ToList();
@@ -1499,9 +1586,8 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
     {
         var jsonTable = new JsonTable { ID = elementId, StructureKey = structureKey };
         var tblProps = table.GetFirstChild<Wp.TableProperties>();
-        var documentSettings = mainPart.DocumentSettingsPart?.Settings;
         var normalizedFallback = NormalizeDirectionToken(fallbackDirection) ?? "ltr";
-        var isDocumentRtl = normalizedFallback == "rtl" || documentSettings?.GetFirstChild<Wp.BiDi>() != null;
+        var isDocumentRtl = normalizedFallback == "rtl";
         if (tblProps != null)
         {
             var borders = tblProps.GetFirstChild<Wp.TableBorders>();
@@ -1514,7 +1600,21 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                 jsonTable.Borders["InsideH"] = GetBorderStyle(borders.InsideHorizontalBorder) ?? "inherit";
                 jsonTable.Borders["InsideV"] = GetBorderStyle(borders.InsideVerticalBorder) ?? "inherit";
             }
-            jsonTable.Borders["Direction"] = tblProps.GetFirstChild<Wp.BiDiVisual>() != null ? "rtl" : normalizedFallback;
+            string tableDirection = "inherit";
+            var tableDirVal = tblProps.GetFirstChild<Wp.TableDirection>()?.Val?.Value;
+            if (tableDirVal == Wp.TableDirectionValues.RightToLeft)
+            {
+                tableDirection = "rtl";
+            }
+            else if (tableDirVal == Wp.TableDirectionValues.LeftToRight)
+            {
+                tableDirection = "ltr";
+            }
+            else if (tblProps.GetFirstChild<Wp.BiDiVisual>() != null)
+            {
+                tableDirection = "rtl";
+            }
+            jsonTable.Borders["Direction"] = tableDirection;
         }
         var tableData = new List<JsonTableRow>();
         int rowIndex = 0;
@@ -1528,12 +1628,12 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                 var firstPara = cell.Elements<Wp.Paragraph>().FirstOrDefault();
                 if (firstPara != null)
                 {
-                    jsonCell.Direction = ResolveParagraphDirection(firstPara, mainPart, normalizedFallback);
+                    jsonCell.Direction = ResolveParagraphDirection(firstPara, mainPart, normalizedFallback, preferInherit: true);
                     jsonCell.Alignment = NormalizeAlignmentToken(GetParagraphAlignment(firstPara, mainPart));
                 }
                 else
                 {
-                    jsonCell.Direction = normalizedFallback;
+                    jsonCell.Direction = "inherit";
                     jsonCell.Alignment = NormalizeAlignmentToken(isDocumentRtl ? "right" : "left");
                 }
 
