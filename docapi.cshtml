@@ -349,11 +349,13 @@ public static object ConvertDocxToJson(string filePath, int? version)
 
         using (WordprocessingDocument wordDoc = WordprocessingDocument.Open(pathToRead, false))
         {
-            var body = wordDoc.MainDocumentPart.Document.Body;
-            documentDirection = GetDocumentDirection(wordDoc);
-            
+            var mainPart = wordDoc.MainDocumentPart;
+            var body = mainPart.Document.Body;
+            var defaultDirection = DetectDocumentDefaultDirection(mainPart);
+            documentDirection = DetermineDocumentDirection(wordDoc, defaultDirection);
+
             // Call the new recursive parsing function starting from the body
-            ParseElementsRecursive(body.ChildElements, ref elementIdCounter, wordDoc.MainDocumentPart, documentElements);
+            ParseElementsRecursive(body.ChildElements, ref elementIdCounter, mainPart, documentElements, documentDirection);
         }
 
         string versionPathForClient = pathToRead.Replace(HttpRuntime.AppDomainAppPath, "").Replace('\\', '/');
@@ -409,7 +411,7 @@ private static void CollectStructuredDocElementsRecursive(IEnumerable<OpenXmlEle
     }
 }
 
-private static void ParseElementsRecursive(IEnumerable<OpenXmlElement> elements, ref int elementIdCounter, MainDocumentPart mainPart, List<object> documentElements, string path = "")
+private static void ParseElementsRecursive(IEnumerable<OpenXmlElement> elements, ref int elementIdCounter, MainDocumentPart mainPart, List<object> documentElements, string fallbackDirection, string path = "")
 {
     if (elements == null) return;
     int index = 0;
@@ -419,11 +421,11 @@ private static void ParseElementsRecursive(IEnumerable<OpenXmlElement> elements,
         elementIdCounter++;
         if (element is Wp.Paragraph para)
         {
-            documentElements.Add(ParseParagraph(para, elementIdCounter, mainPart, currentKey));
+            documentElements.Add(ParseParagraph(para, elementIdCounter, mainPart, currentKey, fallbackDirection));
         }
         else if (element is Wp.Table table)
         {
-            documentElements.Add(ParseTable(table, elementIdCounter, mainPart, currentKey));
+            documentElements.Add(ParseTable(table, elementIdCounter, mainPart, currentKey, fallbackDirection));
         }
         else if (element is Wp.SdtBlock sdtBlock)
         {
@@ -431,7 +433,7 @@ private static void ParseElementsRecursive(IEnumerable<OpenXmlElement> elements,
             var content = sdtBlock.SdtContentBlock;
             if (content != null)
             {
-                ParseElementsRecursive(content.ChildElements, ref elementIdCounter, mainPart, documentElements, currentKey);
+                ParseElementsRecursive(content.ChildElements, ref elementIdCounter, mainPart, documentElements, fallbackDirection, currentKey);
                 index++;
                 continue;
             }
@@ -1087,6 +1089,178 @@ private static string NormalizeDirectionToken(string direction)
     }
 }
 
+private static string DetectDocumentDefaultDirection(MainDocumentPart mainPart)
+{
+    if (mainPart == null) return "ltr";
+
+    try
+    {
+        var stylesPart = mainPart.StyleDefinitionsPart;
+        var docDefaults = stylesPart?.Styles?.DocDefaults?.ParagraphPropertiesDefault?.ParagraphProperties;
+        if (docDefaults != null)
+        {
+            if (docDefaults.BiDi != null) return "rtl";
+            var defaultTextDir = docDefaults.GetFirstChild<Wp.TextDirection>()?.Val?.Value;
+            if (IsRtlTextDirection(defaultTextDir)) return "rtl";
+        }
+
+        var body = mainPart.Document.Body;
+        var sectionProps = body?.Elements<Wp.SectionProperties>().LastOrDefault();
+        if (sectionProps != null)
+        {
+            if (sectionProps.GetFirstChild<Wp.BiDi>() != null) return "rtl";
+            var sectionTextDir = sectionProps.GetFirstChild<Wp.TextDirection>()?.Val?.Value;
+            if (IsRtlTextDirection(sectionTextDir)) return "rtl";
+        }
+
+        var settings = mainPart.DocumentSettingsPart?.Settings;
+        if (settings?.GetFirstChild<Wp.BiDi>() != null) return "rtl";
+    }
+    catch
+    {
+    }
+
+    return "ltr";
+}
+
+private static string DetermineDocumentDirection(WordprocessingDocument wordDoc, string defaultDirection)
+{
+    try
+    {
+        var mainPart = wordDoc.MainDocumentPart;
+        var body = mainPart.Document.Body;
+        var fallback = NormalizeDirectionToken(defaultDirection) ?? "ltr";
+        var paragraphs = body?.Descendants<Wp.Paragraph>().Take(200).ToList();
+        if (paragraphs == null || paragraphs.Count == 0)
+        {
+            return fallback;
+        }
+
+        int rtlCount = 0;
+        int ltrCount = 0;
+
+        foreach (var paragraph in paragraphs)
+        {
+            var resolved = ResolveParagraphDirection(paragraph, mainPart, fallback);
+            if (resolved == "rtl") rtlCount++;
+            else ltrCount++;
+        }
+
+        if (rtlCount == ltrCount)
+        {
+            return fallback;
+        }
+
+        return rtlCount > ltrCount ? "rtl" : "ltr";
+    }
+    catch
+    {
+        return NormalizeDirectionToken(defaultDirection) ?? "ltr";
+    }
+}
+
+private static string ResolveParagraphDirection(Wp.Paragraph paragraph, MainDocumentPart mainPart, string fallbackDirection)
+{
+    var fallback = NormalizeDirectionToken(fallbackDirection) ?? "ltr";
+    if (paragraph == null) return fallback;
+
+    if (IsParagraphExplicitlyRtl(paragraph, mainPart)) return "rtl";
+    if (IsParagraphExplicitlyLtr(paragraph, mainPart)) return "ltr";
+
+    return fallback;
+}
+
+private static bool IsParagraphExplicitlyRtl(Wp.Paragraph paragraph, MainDocumentPart mainPart)
+{
+    var pPr = paragraph?.ParagraphProperties;
+    if (pPr == null) return false;
+
+    if (pPr.BiDi != null) return true;
+
+    var textDirection = pPr.GetFirstChild<Wp.TextDirection>()?.Val?.Value;
+    if (IsRtlTextDirection(textDirection)) return true;
+
+    var styleId = pPr.ParagraphStyleId?.Val?.Value;
+    return IsStyleChainRtl(styleId, mainPart);
+}
+
+private static bool IsParagraphExplicitlyLtr(Wp.Paragraph paragraph, MainDocumentPart mainPart)
+{
+    var pPr = paragraph?.ParagraphProperties;
+    if (pPr == null) return false;
+
+    var textDirection = pPr.GetFirstChild<Wp.TextDirection>()?.Val?.Value;
+    if (textDirection == Wp.TextDirectionValues.LeftToRightTopToBottom || textDirection == Wp.TextDirectionValues.TopToBottomLeftToRight)
+    {
+        return true;
+    }
+
+    var styleId = pPr.ParagraphStyleId?.Val?.Value;
+    if (string.IsNullOrEmpty(styleId)) return false;
+
+    try
+    {
+        var stylesPart = mainPart.StyleDefinitionsPart;
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var currentId = styleId;
+        while (!string.IsNullOrEmpty(currentId) && visited.Add(currentId))
+        {
+            var style = stylesPart?.Styles?.Elements<Wp.Style>().FirstOrDefault(s => s.StyleId == currentId);
+            if (style?.StyleParagraphProperties?.BiDi != null) return false;
+            var styleTextDir = style?.StyleParagraphProperties?.GetFirstChild<Wp.TextDirection>()?.Val?.Value;
+            if (styleTextDir == Wp.TextDirectionValues.LeftToRightTopToBottom || styleTextDir == Wp.TextDirectionValues.TopToBottomLeftToRight)
+            {
+                return true;
+            }
+            currentId = style?.BasedOn?.Val?.Value;
+        }
+    }
+    catch
+    {
+    }
+
+    return false;
+}
+
+private static bool IsStyleChainRtl(string styleId, MainDocumentPart mainPart)
+{
+    if (string.IsNullOrEmpty(styleId)) return false;
+
+    try
+    {
+        var stylesPart = mainPart.StyleDefinitionsPart;
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var currentId = styleId;
+        while (!string.IsNullOrEmpty(currentId) && visited.Add(currentId))
+        {
+            var style = stylesPart?.Styles?.Elements<Wp.Style>().FirstOrDefault(s => s.StyleId == currentId);
+            if (style?.StyleParagraphProperties?.BiDi != null) return true;
+            var styleTextDir = style?.StyleParagraphProperties?.GetFirstChild<Wp.TextDirection>()?.Val?.Value;
+            if (IsRtlTextDirection(styleTextDir)) return true;
+            currentId = style?.BasedOn?.Val?.Value;
+        }
+    }
+    catch
+    {
+    }
+
+    return false;
+}
+
+private static bool IsRtlTextDirection(Wp.TextDirectionValues? textDirection)
+{
+    if (!textDirection.HasValue) return false;
+
+    switch (textDirection.Value)
+    {
+        case Wp.TextDirectionValues.RightToLeftTopToBottom:
+        case Wp.TextDirectionValues.TopToBottomRightToLeft:
+            return true;
+        default:
+            return false;
+    }
+}
+
 private static string GetParagraphAlignment(Wp.Paragraph para, MainDocumentPart mainPart)
 {
     var pPr = para.ParagraphProperties;
@@ -1231,7 +1405,7 @@ private static string ExtractRunTextWithBreaks(Wp.Run run)
     return run.InnerText ?? string.Empty;
 }
 
-private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, MainDocumentPart mainPart, string structureKey)
+private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, MainDocumentPart mainPart, string structureKey, string fallbackDirection)
 {
     var jsonPara = new JsonParagraph { ID = elementId, StructureKey = structureKey };
     var pPr = para.ParagraphProperties;
@@ -1245,7 +1419,7 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
             jsonPara.Formatting["algin"] = alignment;
         }
         if (pPr.Shading?.Fill != null) jsonPara.Formatting["Shading"] = pPr.Shading.Fill.Value;
-        var direction = NormalizeDirectionToken(pPr.BiDi != null ? "rtl" : "ltr");
+        var direction = ResolveParagraphDirection(para, mainPart, fallbackDirection);
         if (!string.IsNullOrEmpty(direction)) jsonPara.Formatting["Direction"] = direction;
     }
     var runs = para.Elements<Wp.Run>().ToList();
@@ -1303,12 +1477,13 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
     return jsonPara;
 }
 
-    private static JsonTable ParseTable(Wp.Table table, int elementId, MainDocumentPart mainPart, string structureKey)
+    private static JsonTable ParseTable(Wp.Table table, int elementId, MainDocumentPart mainPart, string structureKey, string fallbackDirection)
     {
         var jsonTable = new JsonTable { ID = elementId, StructureKey = structureKey };
         var tblProps = table.GetFirstChild<Wp.TableProperties>();
         var documentSettings = mainPart.DocumentSettingsPart?.Settings;
-        var isDocumentRtl = documentSettings?.GetFirstChild<Wp.BiDi>() != null;
+        var normalizedFallback = NormalizeDirectionToken(fallbackDirection) ?? "ltr";
+        var isDocumentRtl = normalizedFallback == "rtl" || documentSettings?.GetFirstChild<Wp.BiDi>() != null;
         if (tblProps != null)
         {
             var borders = tblProps.GetFirstChild<Wp.TableBorders>();
@@ -1321,7 +1496,7 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                 jsonTable.Borders["InsideH"] = GetBorderStyle(borders.InsideHorizontalBorder) ?? "inherit";
                 jsonTable.Borders["InsideV"] = GetBorderStyle(borders.InsideVerticalBorder) ?? "inherit";
             }
-            jsonTable.Borders["Direction"] = tblProps.GetFirstChild<Wp.BiDiVisual>() != null ? "rtl" : "ltr";
+            jsonTable.Borders["Direction"] = tblProps.GetFirstChild<Wp.BiDiVisual>() != null ? "rtl" : normalizedFallback;
         }
         var tableData = new List<JsonTableRow>();
         int rowIndex = 0;
@@ -1335,13 +1510,12 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                 var firstPara = cell.Elements<Wp.Paragraph>().FirstOrDefault();
                 if (firstPara != null)
                 {
-                    jsonCell.Direction = NormalizeDirectionToken(firstPara.ParagraphProperties?.BiDi != null ? "rtl" : "ltr")
-                        ?? (isDocumentRtl ? "rtl" : "ltr");
+                    jsonCell.Direction = ResolveParagraphDirection(firstPara, mainPart, normalizedFallback);
                     jsonCell.Alignment = NormalizeAlignmentToken(GetParagraphAlignment(firstPara, mainPart));
                 }
                 else
                 {
-                    jsonCell.Direction = isDocumentRtl ? "rtl" : "ltr";
+                    jsonCell.Direction = normalizedFallback;
                     jsonCell.Alignment = NormalizeAlignmentToken(isDocumentRtl ? "right" : "left");
                 }
 
@@ -1352,7 +1526,7 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                     string paragraphKey = string.IsNullOrEmpty(structureKey)
                         ? null
                         : $"{structureKey}.r{rowIndex}c{cellIndex}p{paragraphIndex}";
-                    var parsedPara = ParseParagraph(para, 0, mainPart, paragraphKey);
+                    var parsedPara = ParseParagraph(para, 0, mainPart, paragraphKey, fallbackDirection);
                     if (parsedPara?.Content != null)
                     {
                         var runs = parsedPara.Content.OfType<JsonRun>();
@@ -1416,31 +1590,6 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
     }
 
 
-
-    private static string GetDocumentDirection(WordprocessingDocument wordDoc)
-    {
-        try
-        {
-            var documentSettings = wordDoc.MainDocumentPart.DocumentSettingsPart?.Settings;
-            if (documentSettings?.GetFirstChild<Wp.BiDi>() != null)
-            {
-                return "rtl";
-            }
-
-            var body = wordDoc.MainDocumentPart.Document.Body;
-            var firstPara = body.Elements<Wp.Paragraph>().FirstOrDefault();
-            if (firstPara?.ParagraphProperties?.BiDi != null)
-            {
-                return "rtl";
-            }
-
-            return "ltr";
-        }
-        catch
-        {
-            return "ltr";
-        }
-    }
 
     private static string GetBorderStyle(OpenXmlElement border)
     {

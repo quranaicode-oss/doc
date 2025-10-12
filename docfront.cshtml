@@ -1396,8 +1396,8 @@
             Table: new Set(['ID', 'Type', 'Content', 'StructureKey'])
         };
 
-        const allowedFormattingKeys = new Set(['Alignment', 'Direction', 'Shading']);
-        const allowedCellKeys = new Set(['Content', 'Alignment', 'Direction', 'TextRotation', 'GridSpan', 'rowSpan', 'VerticalMerge']);
+        const allowedFormattingKeys = new Set(['Alignment', 'Direction', 'Shading', 'algin']);
+        const allowedCellKeys = new Set(['Content', 'Alignment', 'Direction', 'algin', 'TextRotation', 'GridSpan', 'rowSpan', 'VerticalMerge']);
         const allowedRowKeys = new Set(['Cells']);
 
         payload.Elements.forEach(element => {
@@ -1415,6 +1415,9 @@
                             cleanedFormatting[key] = element.Formatting[key];
                         }
                     });
+                    if (cleanedFormatting.Alignment && !cleanedFormatting.algin) {
+                        cleanedFormatting.algin = cleanedFormatting.Alignment;
+                    }
                     if (Object.keys(cleanedFormatting).length > 0) {
                         element.Formatting = cleanedFormatting;
                     } else {
@@ -1437,7 +1440,12 @@
                                     delete cell[key];
                                 }
                             });
-                            if (!cell.Alignment) delete cell.Alignment;
+                            if (!cell.Alignment) {
+                                delete cell.Alignment;
+                                delete cell.algin;
+                            } else if (!cell.algin) {
+                                cell.algin = cell.Alignment;
+                            }
                             if (!cell.Direction) delete cell.Direction;
                             if (!cell.TextRotation) delete cell.TextRotation;
                             if (!cell.GridSpan || cell.GridSpan === 1) delete cell.GridSpan;
