@@ -1191,10 +1191,7 @@ private static bool IsParagraphExplicitlyLtr(Wp.Paragraph paragraph, MainDocumen
     if (pPr == null) return false;
 
     var textDirection = pPr.GetFirstChild<Wp.TextDirection>()?.Val?.Value;
-    if (textDirection == Wp.TextDirectionValues.LeftToRightTopToBottom || textDirection == Wp.TextDirectionValues.TopToBottomLeftToRight)
-    {
-        return true;
-    }
+    if (IsLtrTextDirection(textDirection)) return true;
 
     var styleId = pPr.ParagraphStyleId?.Val?.Value;
     if (string.IsNullOrEmpty(styleId)) return false;
@@ -1209,10 +1206,7 @@ private static bool IsParagraphExplicitlyLtr(Wp.Paragraph paragraph, MainDocumen
             var style = stylesPart?.Styles?.Elements<Wp.Style>().FirstOrDefault(s => s.StyleId == currentId);
             if (style?.StyleParagraphProperties?.BiDi != null) return false;
             var styleTextDir = style?.StyleParagraphProperties?.GetFirstChild<Wp.TextDirection>()?.Val?.Value;
-            if (styleTextDir == Wp.TextDirectionValues.LeftToRightTopToBottom || styleTextDir == Wp.TextDirectionValues.TopToBottomLeftToRight)
-            {
-                return true;
-            }
+            if (IsLtrTextDirection(styleTextDir)) return true;
             currentId = style?.BasedOn?.Val?.Value;
         }
     }
@@ -1248,14 +1242,37 @@ private static bool IsStyleChainRtl(string styleId, MainDocumentPart mainPart)
     return false;
 }
 
+private static bool IsLtrTextDirection(Wp.TextDirectionValues? textDirection)
+{
+    if (!textDirection.HasValue) return false;
+
+    var directionValue = textDirection.Value.ToString();
+    switch (directionValue)
+    {
+        case "LeftToRightTopToBottom":
+        case "TopToBottomLeftToRight":
+        case "LeftToRight":
+        case "LrTb":
+        case "TbLr":
+        case "Lr":
+            return true;
+        default:
+            return false;
+    }
+}
+
 private static bool IsRtlTextDirection(Wp.TextDirectionValues? textDirection)
 {
     if (!textDirection.HasValue) return false;
 
-    switch (textDirection.Value)
+    var directionValue = textDirection.Value.ToString();
+    switch (directionValue)
     {
-        case Wp.TextDirectionValues.RightToLeftTopToBottom:
-        case Wp.TextDirectionValues.TopToBottomRightToLeft:
+        case "RightToLeftTopToBottom":
+        case "TopToBottomRightToLeft":
+        case "RightToLeft":
+        case "TbRl":
+        case "Rl":
             return true;
         default:
             return false;
