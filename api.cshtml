@@ -1089,6 +1089,27 @@ private static string NormalizeDirectionToken(string direction)
     }
 }
 
+private static bool IsPropertyEnabled(OpenXmlElement onOffElement)
+{
+    if (onOffElement is DocumentFormat.OpenXml.Wordprocessing.OnOffType onOff)
+    {
+        var val = onOff.Val;
+        if (val == null)
+        {
+            return true;
+        }
+
+        if (val.HasValue)
+        {
+            return val.Value;
+        }
+
+        return true;
+    }
+
+    return onOffElement != null;
+}
+
 private static string DetectDocumentDefaultDirection(MainDocumentPart mainPart)
 {
     if (mainPart == null) return "ltr";
@@ -1100,7 +1121,7 @@ private static string DetectDocumentDefaultDirection(MainDocumentPart mainPart)
             .GetFirstChild<Wp.ParagraphProperties>();
         if (docDefaults != null)
         {
-            if (docDefaults.BiDi != null) return "rtl";
+            if (IsPropertyEnabled(docDefaults.BiDi)) return "rtl";
             var defaultTextDir = docDefaults.GetFirstChild<Wp.TextDirection>()?.Val?.Value;
             if (IsRtlTextDirection(defaultTextDir)) return "rtl";
         }
@@ -1109,13 +1130,15 @@ private static string DetectDocumentDefaultDirection(MainDocumentPart mainPart)
         var sectionProps = body?.Elements<Wp.SectionProperties>().LastOrDefault();
         if (sectionProps != null)
         {
-            if (sectionProps.GetFirstChild<Wp.BiDi>() != null) return "rtl";
+            var sectionBiDi = sectionProps.GetFirstChild<Wp.BiDi>();
+            if (IsPropertyEnabled(sectionBiDi)) return "rtl";
             var sectionTextDir = sectionProps.GetFirstChild<Wp.TextDirection>()?.Val?.Value;
             if (IsRtlTextDirection(sectionTextDir)) return "rtl";
         }
 
         var settings = mainPart.DocumentSettingsPart?.Settings;
-        if (settings?.GetFirstChild<Wp.BiDi>() != null) return "rtl";
+        var documentBiDi = settings?.GetFirstChild<Wp.BiDi>();
+        if (IsPropertyEnabled(documentBiDi)) return "rtl";
     }
     catch
     {
@@ -1184,7 +1207,7 @@ private static string ResolveTableDirection(Wp.TableProperties tableProperties)
 {
     if (tableProperties == null) return "inherit";
 
-    if (tableProperties.GetFirstChild<Wp.BiDiVisual>() != null)
+    if (IsPropertyEnabled(tableProperties.GetFirstChild<Wp.BiDiVisual>()))
     {
         return "rtl";
     }
@@ -1197,7 +1220,7 @@ private static bool IsParagraphExplicitlyRtl(Wp.Paragraph paragraph, MainDocumen
     var pPr = paragraph?.ParagraphProperties;
     if (pPr == null) return false;
 
-    if (pPr.BiDi != null) return true;
+    if (IsPropertyEnabled(pPr.BiDi)) return true;
 
     var textDirection = pPr.GetFirstChild<Wp.TextDirection>()?.Val?.Value;
     if (IsRtlTextDirection(textDirection)) return true;
@@ -1210,6 +1233,8 @@ private static bool IsParagraphExplicitlyLtr(Wp.Paragraph paragraph, MainDocumen
 {
     var pPr = paragraph?.ParagraphProperties;
     if (pPr == null) return false;
+
+    if (pPr.BiDi != null && !IsPropertyEnabled(pPr.BiDi)) return true;
 
     var textDirection = pPr.GetFirstChild<Wp.TextDirection>()?.Val?.Value;
     if (IsLtrTextDirection(textDirection)) return true;
@@ -1225,7 +1250,12 @@ private static bool IsParagraphExplicitlyLtr(Wp.Paragraph paragraph, MainDocumen
         while (!string.IsNullOrEmpty(currentId) && visited.Add(currentId))
         {
             var style = stylesPart?.Styles?.Elements<Wp.Style>().FirstOrDefault(s => s.StyleId == currentId);
-            if (style?.StyleParagraphProperties?.BiDi != null) return false;
+            var styleBiDi = style?.StyleParagraphProperties?.BiDi;
+            if (styleBiDi != null)
+            {
+                if (IsPropertyEnabled(styleBiDi)) return false;
+                return true;
+            }
             var styleTextDir = style?.StyleParagraphProperties?.GetFirstChild<Wp.TextDirection>()?.Val?.Value;
             if (IsLtrTextDirection(styleTextDir)) return true;
             currentId = style?.BasedOn?.Val?.Value;
@@ -1320,7 +1350,7 @@ private static bool IsStyleChainRtl(string styleId, MainDocumentPart mainPart)
         while (!string.IsNullOrEmpty(currentId) && visited.Add(currentId))
         {
             var style = stylesPart?.Styles?.Elements<Wp.Style>().FirstOrDefault(s => s.StyleId == currentId);
-            if (style?.StyleParagraphProperties?.BiDi != null) return true;
+            if (IsPropertyEnabled(style?.StyleParagraphProperties?.BiDi)) return true;
             var styleTextDir = style?.StyleParagraphProperties?.GetFirstChild<Wp.TextDirection>()?.Val?.Value;
             if (IsRtlTextDirection(styleTextDir)) return true;
             currentId = style?.BasedOn?.Val?.Value;
@@ -1386,9 +1416,9 @@ private static string GetParagraphAlignment(Wp.Paragraph para, MainDocumentPart 
         if (alignment == Wp.JustificationValues.Both || alignment == Wp.JustificationValues.Distribute)
             return "justify";
         if (alignment == Wp.JustificationValues.Start)
-            return pPr.BiDi != null ? "right" : "left";
+            return IsPropertyEnabled(pPr.BiDi) ? "right" : "left";
         if (alignment == Wp.JustificationValues.End)
-            return pPr.BiDi != null ? "left" : "right";
+            return IsPropertyEnabled(pPr.BiDi) ? "left" : "right";
         return alignment.ToString().ToLower();
     }
 
@@ -1406,7 +1436,7 @@ private static string GetParagraphAlignment(Wp.Paragraph para, MainDocumentPart 
                 {
                     var alignment = styleJustification.Value;
                     var styleBiDi = style.StyleParagraphProperties?.BiDi;
-                    var isRtl = styleBiDi != null || pPr?.BiDi != null;
+                    var isRtl = IsPropertyEnabled(styleBiDi) || IsPropertyEnabled(pPr?.BiDi);
                     
                     if (alignment == Wp.JustificationValues.Left)
                         return "left";
@@ -1431,7 +1461,7 @@ private static string GetParagraphAlignment(Wp.Paragraph para, MainDocumentPart 
                     {
                         var baseAlignment = baseStyle.StyleParagraphProperties.Justification.Val.Value;
                         var baseBiDi = baseStyle.StyleParagraphProperties?.BiDi;
-                        var isRtl = baseBiDi != null || pPr?.BiDi != null;
+                        var isRtl = IsPropertyEnabled(baseBiDi) || IsPropertyEnabled(pPr?.BiDi);
                         
                         if (baseAlignment == Wp.JustificationValues.Left)
                             return "left";
@@ -1453,8 +1483,8 @@ private static string GetParagraphAlignment(Wp.Paragraph para, MainDocumentPart 
     }
 
     var documentSettings = mainPart.DocumentSettingsPart?.Settings;
-    var isDocumentRtl = documentSettings?.GetFirstChild<Wp.BiDi>() != null;
-    var isParagraphRtl = pPr?.BiDi != null;
+    var isDocumentRtl = IsPropertyEnabled(documentSettings?.GetFirstChild<Wp.BiDi>());
+    var isParagraphRtl = IsPropertyEnabled(pPr?.BiDi);
     
     if (isParagraphRtl || isDocumentRtl)
     {
