@@ -1132,7 +1132,10 @@
             docContainer.html(`<p>${t.selectFileData}</p>`);
             return;
         }
-        const documentDirection = normalizeDirectionValue(documentData.json.Direction) || 'ltr';
+        const rawDocumentDirection = normalizeDirectionValue(documentData.json.Direction);
+        const documentDirection = rawDocumentDirection && rawDocumentDirection !== 'inherit'
+            ? rawDocumentDirection
+            : 'ltr';
         docContainer.css('direction', documentDirection);
         const formatRunText = (text) => {
             if (typeof text !== 'string') return '';
