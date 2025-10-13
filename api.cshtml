@@ -1218,7 +1218,9 @@ private static string ResolveTableDirection(Wp.TableProperties tableProperties)
     if (tableDirectionElement != null)
     {
         var valAttribute = tableDirectionElement.GetAttribute("val", "http://schemas.openxmlformats.org/wordprocessingml/2006/main");
-        var directionValue = valAttribute.HasValue ? valAttribute.Value : tableDirectionElement.InnerText;
+        var directionValue = string.IsNullOrWhiteSpace(valAttribute.Value)
+            ? tableDirectionElement.InnerText
+            : valAttribute.Value;
 
         if (!string.IsNullOrWhiteSpace(directionValue))
         {
