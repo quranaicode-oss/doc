@@ -110,6 +110,18 @@
         public long SizeBytes { get; set; }
     }
 
+    public class VersionSummary
+    {
+        public int Version { get; set; }
+        public int? SerialNumber { get; set; }
+        public string RelativePath { get; set; }
+        public string LabelEnglish { get; set; }
+        public string LabelArabic { get; set; }
+        public string LastModifiedUtc { get; set; }
+        public long SizeBytes { get; set; }
+        public bool IsLatest { get; set; }
+    }
+
     public class DocumentVersionManager
     {
         private enum VersionNamingStyle
@@ -507,7 +519,81 @@
             return filePath;
         }
     }
-public static NewDoc ConvertJsonToDocx(string jsonInput, string appPath, string recordID)
+
+    public static List<VersionSummary> DescribeVersionsForClient(string appPath, string relativePath)
+    {
+        var summaries = new List<VersionSummary>();
+        if (string.IsNullOrWhiteSpace(appPath) || string.IsNullOrWhiteSpace(relativePath))
+        {
+            return summaries;
+        }
+
+        string absolutePath;
+        try
+        {
+            absolutePath = ResolveTemplatePath(appPath, relativePath);
+        }
+        catch
+        {
+            absolutePath = Path.Combine(appPath, relativePath.TrimStart('\\', '/').Replace('/', '\\'));
+        }
+
+        try
+        {
+            var manager = new DocumentVersionManager(absolutePath);
+            var descriptors = manager.EnumerateVersions().ToList();
+            if (!descriptors.Any())
+            {
+                return summaries;
+            }
+
+            var latest = manager.GetLatest();
+            foreach (var descriptor in descriptors)
+            {
+                bool isLatest = latest != null && string.Equals(latest.FullPath, descriptor.FullPath, StringComparison.OrdinalIgnoreCase);
+                string relative = descriptor.FullPath.Replace(appPath, string.Empty).TrimStart('\\', '/').Replace('\\', '/');
+
+                summaries.Add(new VersionSummary
+                {
+                    Version = descriptor.Version,
+                    SerialNumber = descriptor.SerialNumber,
+                    RelativePath = relative,
+                    LabelEnglish = BuildVersionLabel(descriptor, true, isLatest),
+                    LabelArabic = BuildVersionLabel(descriptor, false, isLatest),
+                    LastModifiedUtc = descriptor.LastModifiedUtc.ToString("o"),
+                    SizeBytes = descriptor.SizeBytes,
+                    IsLatest = isLatest
+                });
+            }
+        }
+        catch
+        {
+        }
+
+        return summaries;
+    }
+
+    private static string BuildVersionLabel(VersionDescriptor descriptor, bool useEnglish, bool isLatest)
+    {
+        if (descriptor == null)
+        {
+            return string.Empty;
+        }
+
+        string versionPrefix = useEnglish ? "Rev" : "الإصدار";
+        string serialPrefix = useEnglish ? "Serial" : "تسلسل";
+        string modifiedPrefix = useEnglish ? "Last Modified" : "آخر تعديل";
+        string latestTag = useEnglish ? "Latest" : "الأحدث";
+        string versionValue = descriptor.Version >= 0 ? descriptor.Version.ToString("D2", CultureInfo.InvariantCulture) : "00";
+        string serialPart = descriptor.SerialNumber.HasValue
+            ? $" • {serialPrefix}: {descriptor.SerialNumber.Value.ToString("D2", CultureInfo.InvariantCulture)}"
+            : string.Empty;
+        string modifiedPart = $" • {modifiedPrefix}: {descriptor.LastModifiedUtc.ToLocalTime():yyyy-MM-dd HH:mm}";
+        string label = $"{versionPrefix} {versionValue}{serialPart}{modifiedPart}";
+        return isLatest ? $"{label} ({latestTag})" : label;
+    }
+
+    public static NewDoc ConvertJsonToDocx(string jsonInput, string appPath, string recordID)
 {
     try
     {
@@ -2331,6 +2417,26 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
             string fullPath = Path.Combine(appPath, relativePath.TrimStart('\\', '/').Replace('/', '\\'));
             var result = DocumentConverter.ConvertDocxToJson(fullPath, version);
             dataResult = JsonConvert.SerializeObject(result);
+        }
+        else if (id == "versions")
+        {
+            string relativePath = GetPar("filePath", Request);
+            if (string.IsNullOrEmpty(relativePath))
+            {
+                dataResult = JsonConvert.SerializeObject(new { success = false, message = "filePath parameter is missing or empty." });
+            }
+            else
+            {
+                try
+                {
+                    var summaries = DocumentConverter.DescribeVersionsForClient(appPath, relativePath);
+                    dataResult = JsonConvert.SerializeObject(new { success = true, versions = summaries });
+                }
+                catch (Exception versionEx)
+                {
+                    dataResult = JsonConvert.SerializeObject(new { success = false, message = versionEx.Message });
+                }
+            }
         }
         else if (id == "write" || id == "pdf" || id == "html")
         {
