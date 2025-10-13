@@ -1663,8 +1663,7 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                 double? pxWidth = null;
                 if (gridColumn.Width != null)
                 {
-                    double? widthTwips = gridColumn.Width.Value;
-                    pxWidth = ConvertTwipsToPixels(widthTwips);
+                    pxWidth = ConvertTwipsToPixels(gridColumn.Width.Value);
                 }
                 else
                 {
