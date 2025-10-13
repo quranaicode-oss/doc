@@ -1212,6 +1212,34 @@ private static string ResolveTableDirection(Wp.TableProperties tableProperties)
         return "rtl";
     }
 
+    var tableDirectionElement = tableProperties.ChildElements
+        .FirstOrDefault(e => string.Equals(e.LocalName, "tblDir", StringComparison.OrdinalIgnoreCase));
+
+    if (tableDirectionElement != null)
+    {
+        var valAttribute = tableDirectionElement.GetAttribute("val", "http://schemas.openxmlformats.org/wordprocessingml/2006/main");
+        var directionValue = valAttribute.HasValue ? valAttribute.Value : tableDirectionElement.InnerText;
+
+        if (!string.IsNullOrWhiteSpace(directionValue))
+        {
+            var normalized = NormalizeDirectionToken(directionValue);
+            if (!string.IsNullOrEmpty(normalized))
+            {
+                return normalized;
+            }
+
+            if (string.Equals(directionValue, "rtl", StringComparison.OrdinalIgnoreCase))
+            {
+                return "rtl";
+            }
+
+            if (string.Equals(directionValue, "ltr", StringComparison.OrdinalIgnoreCase))
+            {
+                return "ltr";
+            }
+        }
+    }
+
     return "inherit";
 }
 
