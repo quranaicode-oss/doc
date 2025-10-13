@@ -1698,7 +1698,12 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
                 else
                 {
                     var rawWidth = gridColumn.GetAttribute("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main");
-                    pxWidth = ConvertTwipsToPixels(rawWidth?.Value);
+                    var rawWidthValue = rawWidth.Value;
+                    if (string.IsNullOrWhiteSpace(rawWidthValue))
+                    {
+                        rawWidthValue = gridColumn.InnerText;
+                    }
+                    pxWidth = ConvertTwipsToPixels(rawWidthValue);
                 }
                 columnWidths.Add(pxWidth);
             }
