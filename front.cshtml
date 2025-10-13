@@ -971,6 +971,18 @@
             .replace(/'/g, "&#039;");
     }
 
+    const PRIVATE_USE_GLYPH_MAP = {
+        '\uF03E': '>',
+        '\uF0BE': '>',
+        '\uF03C': '<',
+        '\uF0BC': '<'
+    };
+
+    function normalizePrivateUseGlyphs(text) {
+        if (typeof text !== 'string') return '';
+        return text.replace(/[\uF000-\uF0FF]/g, char => PRIVATE_USE_GLYPH_MAP[char] || char);
+    }
+
     function upgradeJsonFormat(data) {
         const json = data.json || data;
         if (!json || !json.Elements || !Array.isArray(json.Elements)) return data;
@@ -1006,7 +1018,7 @@
                 }
                 v2Json.Elements.push(newPara);
             } else if (el.Type === "Table") {
-                const newTable = { ID: el.ID, Type: "Table", Content: [], Borders: el.Borders || {} };
+                const newTable = { ID: el.ID, Type: "Table", Content: [], Borders: el.Borders || {}, ColumnWidths: el.ColumnWidths || [] };
                 if (el.Content && Array.isArray(el.Content)) {
                     el.Content.forEach(row => {
                         const newRow = { Cells: [], Borders: row.Borders || {} };
@@ -1139,7 +1151,9 @@
         docContainer.css('direction', documentDirection);
         const formatRunText = (text) => {
             if (typeof text !== 'string') return '';
-            const normalized = decodeHtmlEntities(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            const decoded = decodeHtmlEntities(text);
+            const glyphNormalized = normalizePrivateUseGlyphs(decoded);
+            const normalized = glyphNormalized.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
             return normalized
                 .split('\n')
                 .map(line => escapeHtml(line).replace(/\t/g, '&emsp;').replace(/ /g, '&nbsp;'))
@@ -1194,17 +1208,63 @@
                     const tableDirectionFallback = explicitTableDirection || documentDirection;
                     const tableDirectionEffective = computeDominantTableDirection(element, tableDirectionFallback) || tableDirectionFallback;
                     const tableBorderStyles = computeBorderStyles(element.Borders);
-                    let tableStyle = `${tableBorderStyles.css} direction: ${tableDirectionEffective || documentDirection}; width: 100%; border-collapse: collapse; table-layout: fixed;`;
+                    const rawColumnWidths = Array.isArray(element.ColumnWidths) ? element.ColumnWidths : [];
+                    const normalizedColumnWidths = rawColumnWidths.map(value => {
+                        if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+                        if (typeof value === 'string') {
+                            const parsed = parseFloat(value);
+                            return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+                        }
+                        return null;
+                    });
+                    const hasColumnWidths = normalizedColumnWidths.some(width => typeof width === 'number' && width > 0);
+                    const tableMinWidth = hasColumnWidths
+                        ? normalizedColumnWidths.reduce((sum, width) => width && width > 0 ? sum + width : sum, 0)
+                        : null;
+                    const colgroupHtml = hasColumnWidths
+                        ? `<colgroup>${normalizedColumnWidths.map(width => width && width > 0 ? `<col style="width:${width}px; min-width:${width}px;">` : '<col>').join('')}</colgroup>`
+                        : '';
+                    const computeSpanWidth = (columns, startIndex, span) => {
+                        if (!Array.isArray(columns) || !columns.length) return null;
+                        if (startIndex < 0) return null;
+                        let total = 0;
+                        for (let offset = 0; offset < span; offset++) {
+                            const columnWidth = columns[startIndex + offset];
+                            if (!columnWidth || !(columnWidth > 0)) return null;
+                            total += columnWidth;
+                        }
+                        return total > 0 ? total : null;
+                    };
+                    const tableStyleParts = [
+                        tableBorderStyles.css,
+                        `direction: ${tableDirectionEffective || documentDirection};`,
+                        'border-collapse: collapse;',
+                        'width: 100%;',
+                        hasColumnWidths ? 'table-layout: fixed;' : 'table-layout: auto;'
+                    ];
+                    if (tableMinWidth) {
+                        tableStyleParts.push(`min-width: ${tableMinWidth}px;`);
+                    }
+                    const tableStyle = tableStyleParts.filter(Boolean).join(' ');
 
-                    let tableBody = (element.Content || []).map((row, rIdx) => {
+                    let tableBody = '';
+                    (element.Content || []).forEach((row, rIdx) => {
                         const rowDirectionPref = resolveDirectionPreference(row);
                         const rowDirectionEffective = (rowDirectionPref && rowDirectionPref !== 'inherit')
                             ? rowDirectionPref
                             : (tableDirectionEffective || documentDirection);
                         const rowBorderStyles = computeBorderStyles(row?.Borders, tableBorderStyles.values);
                         const rowStyle = `${rowBorderStyles.css} direction: ${rowDirectionEffective};`;
-                        let cellsHtml = (row.Cells || []).map((cell, cIdx) => {
-                            if (cell.VerticalMerge === 'Continue') return '';
+                        let columnCursor = 0;
+                        let rowCellsHtml = '';
+                        (row.Cells || []).forEach((cell, cIdx) => {
+                            const spanValue = parseInt(cell.GridSpan, 10);
+                            const effectiveSpan = Number.isFinite(spanValue) && spanValue > 0 ? spanValue : 1;
+                            const spanWidth = computeSpanWidth(normalizedColumnWidths, columnCursor, effectiveSpan);
+                            if (cell.VerticalMerge === 'Continue') {
+                                columnCursor += effectiveSpan;
+                                return;
+                            }
                             const cellDirectionPref = resolveDirectionPreference(cell);
                             let cellDirectionEffective = (cellDirectionPref && cellDirectionPref !== 'inherit')
                                 ? cellDirectionPref
@@ -1235,6 +1295,9 @@
                                 cellBorderStyles.css,
                                 backgroundStyle
                             ];
+                            if (spanWidth) {
+                                cellStyleParts.push(`min-width:${spanWidth}px;`);
+                            }
                             if (cell.TextRotation) {
                                 cellStyleParts.push('writing-mode: vertical-rl; transform: rotate(180deg);');
                             }
@@ -1243,12 +1306,13 @@
                             if (!cellContent && typeof cell.Content === 'string') {
                                 cellContent = formatRunText(cell.Content);
                             }
-                            return `<td class="editable-cell" ${cell.GridSpan > 1 ? `colspan="${cell.GridSpan}"` : ''} ${cell.rowSpan > 1 ? `rowspan="${cell.rowSpan}"` : ''} style="${cellStyle}" data-element-id="${element.ID}" data-row-index="${rIdx}" data-cell-index="${cIdx}" contenteditable="true">${cellContent || '&nbsp;'}</td>`;
-                        }).join('');
+                            rowCellsHtml += `<td class="editable-cell" ${cell.GridSpan > 1 ? `colspan="${cell.GridSpan}"` : ''} ${cell.rowSpan > 1 ? `rowspan="${cell.rowSpan}"` : ''} style="${cellStyle}" data-element-id="${element.ID}" data-row-index="${rIdx}" data-cell-index="${cIdx}" contenteditable="true">${cellContent || '&nbsp;'}</td>`;
+                            columnCursor += effectiveSpan;
+                        });
                         const rowStyleString = rowStyle.trim() || 'border: inherit;';
-                        return `<tr style="${rowStyleString}">${cellsHtml}</tr>`;
-                    }).join('');
-                    elementHtml = `<table class="modern-table" style="${tableStyle}"><tbody>${tableBody}</tbody></table>`;
+                        tableBody += `<tr style="${rowStyleString}">${rowCellsHtml}</tr>`;
+                    });
+                    elementHtml = `<table class="modern-table" style="${tableStyle}">${colgroupHtml}<tbody>${tableBody}</tbody></table>`;
                     break;
                 }
             }
