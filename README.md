@@ -8,10 +8,12 @@ This repository contains the Razor views that power MAS ERP's document managemen
   - Loads a configurable documents root (`~/Docs`) and optional subfolders.
   - Builds an Arabic/English terminology dictionary to localize the UI dynamically based on the `UserLang` cookie.
   - Provides tabs for document metadata, data records, and administrative tools (upload, duplicate, delete, JSON export, PDF export, etc.).
+  - Surfaces a version history selector that queries the API for available DOCX revisions so users can review or switch to older templates before exporting or saving data.
   - Delegates all file operations to AJAX endpoints surfaced by `docapi.cshtml` so the UI stays decoupled from storage logic.
 - **API Razor View (`docapi.cshtml`)**
   - Hosts helper classes such as `DocxToJsonConverter2` that translate between Open XML structures and JSON payloads consumed by the SPA-like front-end.
   - Safely resolves document paths inside the application root to prevent path traversal and validates identifiers before touching the filesystem.
+  - Exposes a lightweight `?id=versions` endpoint that enumerates stored revisions (version number, timestamp, relative path) for the UI dropdown.
   - Interacts with the MAS ERP database via `DBHelper` for metadata lookups, audit trails, and report footers.
 
 ### DOCX Handling Strategy
@@ -64,10 +66,12 @@ Although the current snapshot focuses on Word files, the same design can be exte
   - تحدد مسار مجلد المستندات الجذري مع إمكانية اختيار مجلدات فرعية.
   - تُنشئ قاموس مصطلحات عربي/إنجليزي لتغيير اللغة حسب ملف تعريف الارتباط `UserLang`.
   - تعرض تبويبات لمعلومات المستند وبياناته والأدوات الإدارية (عرض، رفع، تنزيل، تكرار، حذف، حفظ JSON، تصدير PDF).
+  - توفر قائمة لاختيار إصدارات القالب وتستدعي الـ API للحصول على المراجعات المتاحة لملف DOCX حتى يتمكن المستخدم من معاينة الإصدارات السابقة أو الرجوع إليها قبل الحفظ أو الطباعة.
   - تعتمد على `docapi.cshtml` لتنفيذ أي عملية على الملفات بهدف الفصل بين العرض ومعالجة البيانات.
 - **خدمات الخلفية (`docapi.cshtml`)**
   - تشمل فئات مثل `DocxToJsonConverter2` لتحويل محتوى ملفات Word إلى JSON والعكس مع الحفاظ على التنسيق.
   - تتحقق من صلاحية المسارات وتمنع أي محاولة لتجاوز المجلدات المسموح بها.
+  - توفر مسارًا خفيفًا عبر `?id=versions` لإرجاع بيانات الإصدارات (رقم الإصدار، وقت التعديل، المسار النسبي) لاستخدامها داخل قائمة الواجهة.
   - تتكامل مع قاعدة بيانات MAS ERP لاسترجاع بيانات المستندات وإضافة تواقيع الطباعة.
 
 ### منهجية التعامل مع ملفات Word
