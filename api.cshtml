@@ -70,133 +70,437 @@
     public class JsonTableRow { public List<JsonTableCell> Cells { get; set; } = new List<JsonTableCell>(); public Dictionary<string, string> Borders { get; set; } = new Dictionary<string, string>(); }
     public class JsonTableCell { public string Content { get; set; } public int GridSpan { get; set; } = 1; public string VerticalMerge { get; set; } public List<JsonRun> FormattedRuns { get; set; } = new List<JsonRun>(); public List<JsonCheckbox> Checkboxes { get; set; } = new List<JsonCheckbox>(); public Dictionary<string, string> Borders { get; set; } = new Dictionary<string, string>(); public int? rowSpan { get; set; } public string Direction { get; set; } public string Alignment { get; set; } public string TextRotation { get; set; } public string algin { get => Alignment; set => Alignment = value; }}
     public class JsonImage { public int ID { get; set; } public string Type { get; set; } = "Image"; public string StructureKey { get; set; } public string Content { get; set; } }
-public static readonly Regex VersionPattern = new Regex(@"^(.+?)(?:\s*\(Rev\s?(\d+)\))?$", RegexOptions.IgnoreCase);
-          public static string GetVersionedPath(string basePath, int? version)
+
+    public class JsonValidationMessage
+    {
+        public string English { get; set; }
+        public string Arabic { get; set; }
+    }
+
+    public class JsonValidationResult
+    {
+        private readonly List<JsonValidationMessage> _messages = new List<JsonValidationMessage>();
+
+        public bool IsValid => !_messages.Any();
+
+        public IReadOnlyCollection<JsonValidationMessage> Messages => _messages.AsReadOnly();
+
+        public void Add(string english, string arabic)
         {
-            var directory = Path.GetDirectoryName(basePath);
-            var baseFileNameWithoutExt = Path.GetFileNameWithoutExtension(basePath);
-            var extension = Path.GetExtension(basePath);
-
-            // If a specific version is requested, build the path for it.
-            if (version.HasValue)
-            {
-                if (version.Value == 0) return basePath; // Version 0 is the base file itself.
-                string specificPath = Path.Combine(directory, $"{baseFileNameWithoutExt}_v({version.Value}){extension}");
-                return File.Exists(specificPath) ? specificPath : basePath; // Fallback to base if not found
-            }
-
-            // If no version is specified, find the latest version.
-            if (!Directory.Exists(directory)) return basePath;
-
-            var files = Directory.GetFiles(directory, $"{baseFileNameWithoutExt}*{extension}");
-            int latestVersion = -1;
-            string latestFile = basePath;
-
-            foreach (var file in files)
-            {
-                var currentFileName = Path.GetFileNameWithoutExtension(file);
-                var match = VersionPattern.Match(currentFileName);
-
-                if (match.Success && match.Groups[1].Value.Equals(baseFileNameWithoutExt, StringComparison.OrdinalIgnoreCase))
-                {
-                    int currentVersion = 0; // Default to 0 for the base file
-                    if (match.Groups[2].Success && int.TryParse(match.Groups[2].Value, out int parsedVersion))
-                    {
-                        currentVersion = parsedVersion;
-                    }
-
-                    if (currentVersion > latestVersion)
-                    {
-                        latestVersion = currentVersion;
-                        latestFile = file;
-                    }
-                    // Handle the base file itself if it's the only one
-                    else if (latestVersion == -1 && currentVersion == 0)
-                    {
-                        latestVersion = 0;
-                        latestFile = file;
-                    }
-                }
-            }
-            return latestFile;
+            if (string.IsNullOrWhiteSpace(english) && string.IsNullOrWhiteSpace(arabic)) return;
+            _messages.Add(new JsonValidationMessage { English = english, Arabic = arabic });
         }
 
-        // ** REVISED: Generates the next available version number for a new upload **
-       public static string GenerateNewVersionFileName(string originalPath)
-{
-    var directory = Path.GetDirectoryName(originalPath);
-    var fileNameWithoutExt = Path.GetFileNameWithoutExtension(originalPath);
-    var extension = Path.GetExtension(originalPath);
-
-    var match = VersionPattern.Match(fileNameWithoutExt);
-    string baseName = match.Success ? match.Groups[1].Value.Trim() : fileNameWithoutExt;
-
-    var files = Directory.GetFiles(directory, $"{baseName}*{extension}");
-    int maxVersion = 0;
-    foreach (var file in files)
-    {
-        var currentMatch = VersionPattern.Match(Path.GetFileNameWithoutExtension(file));
-        if (currentMatch.Success && currentMatch.Groups[1].Value.Trim().Equals(baseName, StringComparison.OrdinalIgnoreCase))
+        public string ToBilingualMessage()
         {
-            if (currentMatch.Groups[2].Success && int.TryParse(currentMatch.Groups[2].Value, out int currentVersion))
-            {
-                if (currentVersion > maxVersion)
-                {
-                    maxVersion = currentVersion;
-                }
-            }
+            if (IsValid) return string.Empty;
+
+            string english = string.Join("; ", _messages.Select(m => m.English));
+            string arabic = string.Join("; ", _messages.Select(m => m.Arabic));
+            return $"{english} || {arabic}";
         }
     }
 
-    int nextVersion = maxVersion + 1;
-    // Format number with two digits (e.g., 4 becomes 04)
-    return Path.Combine(directory, $"{baseName} (Rev {nextVersion:D2}){extension}");
-}
+    public class VersionDescriptor
+    {
+        public string FullPath { get; set; }
+        public int Version { get; set; }
+        public int? SerialNumber { get; set; }
+        public DateTime LastModifiedUtc { get; set; }
+        public long SizeBytes { get; set; }
+    }
+
+    public class DocumentVersionManager
+    {
+        private enum VersionNamingStyle
+        {
+            RevisionSuffix,
+            UnderscoreSuffix
+        }
+
+        private static readonly Regex AlternateVersionPattern = new Regex(@"^(.+?)(?:_v\((\d+)\))?(?:_S\((\d+)\))?$", RegexOptions.IgnoreCase);
+
+        private readonly string _basePath;
+        private readonly string _directory;
+        private readonly string _extension;
+        private readonly string _baseName;
+        private readonly VersionNamingStyle _style;
+
+        public DocumentVersionManager(string originalPath)
+        {
+            if (string.IsNullOrWhiteSpace(originalPath))
+            {
+                throw new ArgumentException("originalPath cannot be null or empty.", nameof(originalPath));
+            }
+
+            _basePath = originalPath;
+            _directory = Path.GetDirectoryName(originalPath);
+            if (string.IsNullOrEmpty(_directory))
+            {
+                _directory = Directory.Exists(HttpRuntime.AppDomainAppPath)
+                    ? HttpRuntime.AppDomainAppPath
+                    : Directory.GetCurrentDirectory();
+                string fileName = Path.GetFileName(originalPath);
+                if (!string.IsNullOrEmpty(fileName))
+                {
+                    _basePath = Path.Combine(_directory, fileName);
+                }
+            }
+
+            _extension = Path.GetExtension(originalPath) ?? string.Empty;
+            _baseName = DetermineBaseName(Path.GetFileNameWithoutExtension(originalPath));
+            _style = DetectNamingStyle();
+        }
+
+        public IEnumerable<VersionDescriptor> EnumerateVersions()
+        {
+            var descriptors = new List<VersionDescriptor>();
+
+            if (File.Exists(_basePath))
+            {
+                var descriptor = CreateDescriptor(_basePath);
+                if (descriptor != null)
+                {
+                    descriptors.Add(descriptor);
+                }
+            }
+
+            if (Directory.Exists(_directory))
+            {
+                var files = Directory.GetFiles(_directory, $"{_baseName}*{_extension}", SearchOption.TopDirectoryOnly);
+                foreach (var file in files)
+                {
+                    if (string.Equals(file, _basePath, StringComparison.OrdinalIgnoreCase)) continue;
+                    var descriptor = CreateDescriptor(file);
+                    if (descriptor != null)
+                    {
+                        descriptors.Add(descriptor);
+                    }
+                }
+            }
+
+            return descriptors
+                .OrderBy(d => d.Version)
+                .ThenBy(d => d.SerialNumber ?? 0)
+                .ThenBy(d => d.LastModifiedUtc)
+                .ToList();
+        }
+
+        public VersionDescriptor GetLatest()
+        {
+            return EnumerateVersions()
+                .OrderByDescending(d => d.Version)
+                .ThenByDescending(d => d.SerialNumber ?? 0)
+                .ThenByDescending(d => d.LastModifiedUtc)
+                .FirstOrDefault();
+        }
+
+        public string ResolveVersionPath(int? requestedVersion)
+        {
+            if (requestedVersion.HasValue)
+            {
+                var match = EnumerateVersions()
+                    .OrderByDescending(d => d.SerialNumber ?? 0)
+                    .FirstOrDefault(d => d.Version == requestedVersion.Value);
+                if (match != null && File.Exists(match.FullPath))
+                {
+                    return match.FullPath;
+                }
+            }
+
+            var latest = GetLatest();
+            if (latest != null && File.Exists(latest.FullPath))
+            {
+                return latest.FullPath;
+            }
+
+            return _basePath;
+        }
+
+        public string ReserveNextVersionPath(int? serialNumber = null)
+        {
+            int nextVersion = EnumerateVersions().Select(v => v.Version).DefaultIfEmpty(0).Max() + 1;
+            string fileName;
+
+            if (_style == VersionNamingStyle.UnderscoreSuffix)
+            {
+                fileName = $"{_baseName}_v({nextVersion})";
+                if (serialNumber.HasValue)
+                {
+                    fileName += $"_S({serialNumber.Value})";
+                }
+            }
+            else
+            {
+                fileName = $"{_baseName} (Rev {nextVersion:D2})";
+            }
+
+            return Path.Combine(_directory, fileName + _extension);
+        }
+
+        public bool TryParseVersion(string fileNameWithoutExtension, out int version, out int? serialNumber)
+        {
+            return TryExtractVersion(fileNameWithoutExtension, out version, out serialNumber);
+        }
+
+        private VersionDescriptor CreateDescriptor(string path)
+        {
+            string fileName = Path.GetFileNameWithoutExtension(path) ?? string.Empty;
+            if (!TryExtractVersion(fileName, out int version, out int? serialNumber))
+            {
+                return null;
+            }
+
+            var info = new FileInfo(path);
+            return new VersionDescriptor
+            {
+                FullPath = path,
+                Version = version,
+                SerialNumber = serialNumber,
+                LastModifiedUtc = info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue,
+                SizeBytes = info.Exists ? info.Length : 0
+            };
+        }
+
+        private static string DetermineBaseName(string fileNameWithoutExtension)
+        {
+            if (string.IsNullOrWhiteSpace(fileNameWithoutExtension)) return string.Empty;
+
+            var revisionMatch = VersionPattern.Match(fileNameWithoutExtension);
+            if (revisionMatch.Success && !string.IsNullOrWhiteSpace(revisionMatch.Groups[1].Value))
+            {
+                return revisionMatch.Groups[1].Value.Trim();
+            }
+
+            var alternateMatch = AlternateVersionPattern.Match(fileNameWithoutExtension);
+            if (alternateMatch.Success && !string.IsNullOrWhiteSpace(alternateMatch.Groups[1].Value))
+            {
+                return alternateMatch.Groups[1].Value.Trim();
+            }
+
+            return fileNameWithoutExtension.Trim();
+        }
+
+        private VersionNamingStyle DetectNamingStyle()
+        {
+            string fileName = Path.GetFileNameWithoutExtension(_basePath) ?? string.Empty;
+            if (IsUnderscorePattern(fileName)) return VersionNamingStyle.UnderscoreSuffix;
+            if (fileName.IndexOf("(Rev", StringComparison.OrdinalIgnoreCase) >= 0) return VersionNamingStyle.RevisionSuffix;
+
+            if (Directory.Exists(_directory))
+            {
+                foreach (var file in Directory.GetFiles(_directory, $"{_baseName}*{_extension}", SearchOption.TopDirectoryOnly))
+                {
+                    string name = Path.GetFileNameWithoutExtension(file) ?? string.Empty;
+                    if (IsUnderscorePattern(name)) return VersionNamingStyle.UnderscoreSuffix;
+                    if (name.IndexOf("(Rev", StringComparison.OrdinalIgnoreCase) >= 0) return VersionNamingStyle.RevisionSuffix;
+                }
+            }
+
+            return VersionNamingStyle.RevisionSuffix;
+        }
+
+        private bool TryExtractVersion(string fileNameWithoutExtension, out int version, out int? serialNumber)
+        {
+            version = 0;
+            serialNumber = null;
+            string trimmed = (fileNameWithoutExtension ?? string.Empty).Trim();
+
+            var revisionMatch = VersionPattern.Match(trimmed);
+            if (revisionMatch.Success && NormalizeBase(revisionMatch.Groups[1].Value).Equals(_baseName, StringComparison.OrdinalIgnoreCase))
+            {
+                if (revisionMatch.Groups[2].Success && int.TryParse(revisionMatch.Groups[2].Value, out int parsedVersion))
+                {
+                    version = parsedVersion;
+                }
+                return true;
+            }
+
+            var alternateMatch = AlternateVersionPattern.Match(trimmed);
+            if (alternateMatch.Success && NormalizeBase(alternateMatch.Groups[1].Value).Equals(_baseName, StringComparison.OrdinalIgnoreCase))
+            {
+                if (alternateMatch.Groups[2].Success && int.TryParse(alternateMatch.Groups[2].Value, out int parsedVersion))
+                {
+                    version = parsedVersion;
+                }
+                if (alternateMatch.Groups[3].Success && int.TryParse(alternateMatch.Groups[3].Value, out int parsedSerial))
+                {
+                    serialNumber = parsedSerial;
+                }
+                return true;
+            }
+
+            if (NormalizeBase(trimmed).Equals(_baseName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsUnderscorePattern(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return false;
+            return AlternateVersionPattern.IsMatch(value) && value.IndexOf("_v", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static string NormalizeBase(string value)
+        {
+            return (value ?? string.Empty).Trim();
+        }
+    }
+
+    public static JsonValidationResult ValidateJsonPayload(JsonPayload payload)
+    {
+        var result = new JsonValidationResult();
+
+        if (payload == null)
+        {
+            result.Add("JSON payload is empty.", "ملف JSON المستلم فارغ.");
+            return result;
+        }
+
+        if (string.IsNullOrWhiteSpace(payload.FileVersionPath))
+        {
+            result.Add("FileVersionPath is required.", "مسار نسخة الملف مطلوب.");
+        }
+        else
+        {
+            string trimmed = payload.FileVersionPath.Trim();
+            if (Path.IsPathRooted(trimmed))
+            {
+                result.Add("FileVersionPath must be relative.", "مسار الملف يجب أن يكون نسبياً.");
+            }
+            if (trimmed.Contains(".."))
+            {
+                result.Add("FileVersionPath cannot include '..'.", "مسار الملف لا يجب أن يحتوي على '..'.");
+            }
+        }
+
+        if (payload.Elements == null || !payload.Elements.Any())
+        {
+            result.Add("Elements collection is empty.", "قائمة العناصر في JSON فارغة.");
+        }
+        else
+        {
+            int index = 0;
+            foreach (var element in payload.Elements)
+            {
+                if (element == null)
+                {
+                    result.Add($"Element #{index + 1} is empty.", $"العنصر رقم {index + 1} فارغ.");
+                }
+                else
+                {
+                    try
+                    {
+                        var token = element as Newtonsoft.Json.Linq.JToken ?? Newtonsoft.Json.Linq.JToken.FromObject(element);
+                        var typeValue = token?["Type"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(typeValue))
+                        {
+                            result.Add($"Element #{index + 1} is missing a Type value.", $"العنصر رقم {index + 1} يفتقد قيمة النوع.");
+                        }
+                    }
+                    catch
+                    {
+                        result.Add($"Element #{index + 1} could not be parsed.", $"تعذر تحليل العنصر رقم {index + 1}.");
+                    }
+                }
+
+                index++;
+                if (index >= 25) break; // Prevent extremely large error lists.
+            }
+        }
+
+        return result;
+    }
+
+    private static string ResolveTemplatePath(string appPath, string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(appPath))
+        {
+            throw new InvalidOperationException("Application root path is undefined.");
+        }
+
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            throw new InvalidOperationException("Relative path is empty.");
+        }
+
+        string sanitized = relativePath
+            .Replace('/', Path.DirectorySeparatorChar)
+            .Replace('\', Path.DirectorySeparatorChar)
+            .Trim();
+
+        while (sanitized.StartsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal))
+        {
+            sanitized = sanitized.Substring(1);
+        }
+
+        if (string.IsNullOrWhiteSpace(sanitized))
+        {
+            throw new InvalidOperationException("Relative path resolved to an empty value.");
+        }
+
+        if (sanitized.Contains(".."))
+        {
+            throw new InvalidOperationException("Relative path cannot include '..'.");
+        }
+
+        string root = EnsureTrailingSeparator(appPath);
+        string fullPath = Path.GetFullPath(Path.Combine(root, sanitized));
+
+        if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Relative path resolves outside the allowed directory.");
+        }
+
+        return fullPath;
+    }
+
+    private static string EnsureTrailingSeparator(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return path;
+        return path.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+            ? path
+            : path + Path.DirectorySeparatorChar;
+    }
+
+    public static readonly Regex VersionPattern = new Regex(@"^(.+?)(?:\s*\(Rev\s?(\d+)\))?$", RegexOptions.IgnoreCase);
+
+          public static string GetVersionedPath(string basePath, int? version)
+        {
+            try
+            {
+                var manager = new DocumentVersionManager(basePath);
+                var resolved = manager.ResolveVersionPath(version);
+                return File.Exists(resolved) ? resolved : basePath;
+            }
+            catch
+            {
+                return basePath;
+            }
+        }
+
+        public static string GenerateNewVersionFileName(string originalPath)
+        {
+            try
+            {
+                var manager = new DocumentVersionManager(originalPath);
+                return manager.ReserveNextVersionPath();
+            }
+            catch
+            {
+                return originalPath;
+            }
+        }
     public static string FindLatestVersion(string filePath)
     {
         try
         {
-            var directory = Path.GetDirectoryName(filePath);
-            var fileName = Path.GetFileName(filePath);
-            var extension = Path.GetExtension(filePath);
-
-            if (!Directory.Exists(directory) || !File.Exists(filePath))
-                return filePath;
-
-            var baseFileNameWithoutExt = Path.GetFileNameWithoutExtension(filePath);
-            var files = Directory.GetFiles(directory, $"*{extension}");
-
-            var versionPattern = new Regex(@"^(.+?)(?:_v\((\d+)\))?(?:_S\((\d+)\))?$", RegexOptions.IgnoreCase);
-            var baseMatch = versionPattern.Match(baseFileNameWithoutExt);
-
-            if (!baseMatch.Success) return filePath;
-
-            string baseCodeAndName = baseMatch.Groups[1].Value;
-            int latestVersion = -1;
-            string latestFile = filePath;
-
-            foreach (var file in files)
-            {
-                var currentFileName = Path.GetFileNameWithoutExtension(file);
-                var currentMatch = versionPattern.Match(currentFileName);
-
-                if (currentMatch.Success && currentMatch.Groups[1].Value.Equals(baseCodeAndName, StringComparison.OrdinalIgnoreCase))
-                {
-                    int currentVersion = 0;
-                    if (currentMatch.Groups[2].Success)
-                    {
-                        int.TryParse(currentMatch.Groups[2].Value, out currentVersion);
-                    }
-
-                    if (currentVersion > latestVersion)
-                    {
-                        latestVersion = currentVersion;
-                        latestFile = file;
-                    }
-                }
-            }
-
-            return File.Exists(latestFile) ? latestFile : filePath;
+            var manager = new DocumentVersionManager(filePath);
+            var latest = manager.ResolveVersionPath(null);
+            return File.Exists(latest) ? latest : filePath;
         }
         catch
         {
@@ -208,15 +512,27 @@ public static NewDoc ConvertJsonToDocx(string jsonInput, string appPath, string 
     try
     {
         JsonPayload payload = JsonConvert.DeserializeObject<JsonPayload>(jsonInput);
-        if (payload == null || string.IsNullOrEmpty(payload.FileVersionPath))
+        var validation = ValidateJsonPayload(payload);
+        if (!validation.IsValid)
         {
-            return new NewDoc { success = false, message = "File version path was not found in the JSON payload." };
+            return new NewDoc { success = false, message = validation.ToBilingualMessage() };
         }
 
-        string templatePath = Path.Combine(appPath, payload.FileVersionPath.TrimStart('\\', '/').Replace('/', '\\'));
+        string templatePath;
+        try
+        {
+            templatePath = ResolveTemplatePath(appPath, payload.FileVersionPath);
+        }
+        catch (Exception pathEx)
+        {
+            string bilingualMessage = $"Invalid template path: {pathEx.Message} || مسار القالب غير صالح: {pathEx.Message}";
+            return new NewDoc { success = false, message = bilingualMessage };
+        }
+
         if (!File.Exists(templatePath))
         {
-            return new NewDoc { success = false, message = $"Template file not found: {templatePath}" };
+            string bilingualNotFound = $"Template file not found: {templatePath} || لم يتم العثور على القالب: {templatePath}";
+            return new NewDoc { success = false, message = bilingualNotFound };
         }
 
         byte[] originalBytes = File.ReadAllBytes(templatePath);
@@ -289,42 +605,15 @@ public static NewDoc ConvertJsonToDocx(string jsonInput, string appPath, string 
 }
     public static string GenerateNewVersionFileName(string originalPath, int? serialNumber = null)
     {
-        var directory = Path.GetDirectoryName(originalPath);
-        var fileName = Path.GetFileNameWithoutExtension(originalPath);
-        var extension = Path.GetExtension(originalPath);
-
-        var versionPattern = new Regex(@"^(.+?)(?:_v\((\d+)\))?(?:_S\((\d+)\))?$", RegexOptions.IgnoreCase);
-        var match = versionPattern.Match(fileName);
-
-        string baseCodeAndName = match.Success ? match.Groups[1].Value : fileName;
-
-        var files = Directory.GetFiles(directory, $"{baseCodeAndName}*{extension}");
-        int nextVersion = 1;
-
-        foreach (var file in files)
+        try
         {
-            var currentFileName = Path.GetFileNameWithoutExtension(file);
-            var currentMatch = versionPattern.Match(currentFileName);
-
-            if (currentMatch.Success && currentMatch.Groups[1].Value.Equals(baseCodeAndName, StringComparison.OrdinalIgnoreCase))
-            {
-                if (currentMatch.Groups[2].Success)
-                {
-                    if (int.TryParse(currentMatch.Groups[2].Value, out int currentVersion))
-                    {
-                        nextVersion = Math.Max(nextVersion, currentVersion + 1);
-                    }
-                }
-            }
+            var manager = new DocumentVersionManager(originalPath);
+            return manager.ReserveNextVersionPath(serialNumber);
         }
-
-        string newFileName = $"{baseCodeAndName}_v({nextVersion})";
-        if (serialNumber.HasValue)
+        catch
         {
-            newFileName += $"_S({serialNumber.Value})";
+            return originalPath;
         }
-
-        return Path.Combine(directory, newFileName + extension);
     }
 public static object ConvertDocxToJson(string filePath, int? version)
 {
@@ -1990,15 +2279,24 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
         }
     }
     public static int ExtractVersionNumber(string filePath)
-{
-    var fileName = Path.GetFileNameWithoutExtension(filePath);
-    var match = VersionPattern.Match(fileName);
-    if (match.Success && match.Groups[2].Success && int.TryParse(match.Groups[2].Value, out int version))
     {
-        return version;
+        if (string.IsNullOrWhiteSpace(filePath)) return 0;
+
+        try
+        {
+            var manager = new DocumentVersionManager(filePath);
+            if (manager.TryParseVersion(Path.GetFileNameWithoutExtension(filePath), out int version, out _))
+            {
+                return version;
+            }
+        }
+        catch
+        {
+            return 0;
+        }
+
+        return 0;
     }
-    return 0; // Default to version 0 if not found
-}
 }
 
 
