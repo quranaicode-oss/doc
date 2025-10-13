@@ -58,6 +58,14 @@ Although the current snapshot focuses on Word files, the same design can be exte
 - Provide fine-grained permission checks (view/edit/download) sourced from MAS ERP's role management tables.
 - Cache parsed JSON representations for frequently accessed documents to minimize repeated Open XML traversals.
 
+### Mishkah HTMLx Demo Pages
+- `index-htmlx.html`, `index-htmlx-v2.html`, and `chat.html` are standalone demos that load both `acorn` and `acorn-walk` before the shared `mishkah-htmlx.js` helper to avoid secure evaluator errors.
+- The reusable HTMLx helper lives at the repository root as `mishkah-htmlx.js`, eliminating the need for `dist/mishkah-htmlx.js` duplicates.
+
+### صفحات عرض Mishkah HTMLx
+- ملفات `index-htmlx.html` و`index-htmlx-v2.html` و`chat.html` عبارة عن عروض مستقلة تحمّل مكتبات `acorn` و`acorn-walk` قبل ملف المساعدة الموحد `mishkah-htmlx.js` لتفادي أخطاء التحقق الآمن.
+- ملف المساعدة المشترك يوجد في الجذر باسم `mishkah-htmlx.js` مما يلغي الحاجة إلى نسخة `dist/mishkah-htmlx.js`.
+
 ## نظرة عامة بالعربية
 يحتوي هذا المستودع على صفحتي Razor المسؤولتين عن تجربة إدارة المستندات في MAS ERP. الواجهة (`docfront.cshtml`) تعرض شاشات ثنائية اللغة لتصفح المستندات ورفعها وتحرير بياناتها، بينما تقدم صفحة الـ API (`docapi.cshtml`) أدوات خدمية يتواصل معها الواجهة الأمامية عبر طلبات AJAX لإجراء عمليات الملفات وحفظ البيانات.
 

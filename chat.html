@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mishkah HTMLx Chat Demo</title>
+    <meta
+      name="description"
+      content="Realtime Mishkah HTMLx chat sample that shares the secure evaluator fix and unified script path."
+    />
+    <script src="https://cdn.jsdelivr.net/npm/acorn@8/dist/acorn.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/acorn-walk@8/dist/walk.min.js" defer></script>
+    <script src="./mishkah-htmlx.js" defer></script>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #eef2f9;
+        --panel: #ffffff;
+        --accent: #0d6efd;
+        --accent-soft: rgba(13, 110, 253, 0.12);
+        --border: rgba(15, 23, 42, 0.08);
+        --shadow: rgba(15, 23, 42, 0.14);
+        font-family: 'Tajawal', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        background: linear-gradient(160deg, #ffffff 0%, var(--bg) 100%);
+        display: flex;
+        justify-content: center;
+        padding: 2.5rem 1.5rem 3rem;
+      }
+
+      main {
+        width: min(960px, 100%);
+        background-color: var(--panel);
+        border-radius: 20px;
+        border: 1px solid var(--border);
+        box-shadow: 0 20px 40px var(--shadow);
+        padding: 2.5rem;
+        display: grid;
+        gap: 2rem;
+      }
+
+      header h1 {
+        margin: 0 0 1rem;
+        font-size: clamp(2rem, 3vw, 2.8rem);
+        color: #0b2447;
+      }
+
+      header p {
+        margin: 0;
+        font-size: 1.05rem;
+        line-height: 1.7;
+        color: #1f3c68;
+      }
+
+      .chat-panel {
+        display: grid;
+        gap: 1.5rem;
+        grid-template-columns: 1fr;
+      }
+
+      .messages {
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background-color: #fbfdff;
+        padding: 1.5rem;
+        max-height: 380px;
+        overflow-y: auto;
+        display: grid;
+        gap: 1.2rem;
+      }
+
+      .messages.empty::after {
+        content: 'Start the conversation with the form below · ابدأ المحادثة من النموذج أدناه';
+        font-size: 1rem;
+        color: #4b6389;
+        text-align: center;
+      }
+
+      form {
+        display: grid;
+        gap: 1rem;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 1.5rem;
+        background-color: var(--panel);
+      }
+
+      label {
+        font-weight: 600;
+        color: #0b3056;
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        border-radius: 12px;
+        border: 1px solid rgba(15, 23, 42, 0.12);
+        padding: 0.7rem 0.9rem;
+        font-size: 1rem;
+        font-family: inherit;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      input:focus,
+      textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+      }
+
+      button {
+        justify-self: start;
+        padding: 0.75rem 1.6rem;
+        border-radius: 999px;
+        border: none;
+        background-color: var(--accent);
+        color: #ffffff;
+        font-size: 1rem;
+        cursor: pointer;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      button:hover,
+      button:focus {
+        transform: translateY(-1px);
+        box-shadow: 0 12px 24px rgba(13, 110, 253, 0.25);
+        outline: none;
+      }
+
+      .message {
+        border-radius: 14px;
+        background-color: #ffffff;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+        padding: 1rem 1.25rem;
+        display: grid;
+        gap: 0.4rem;
+      }
+
+      .message-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        font-size: 0.95rem;
+        color: #15345b;
+      }
+
+      .message-author {
+        font-weight: 600;
+      }
+
+      .message-time {
+        opacity: 0.75;
+        font-size: 0.9rem;
+      }
+
+      .message-content {
+        margin: 0;
+        line-height: 1.6;
+        color: #1f3a60;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Mishkah HTMLx Chat · دردشة Mishkah HTMLx</h1>
+        <p>
+          The chat shares the same secure evaluator fix by loading acorn and acorn-walk before the
+          unified <code>mishkah-htmlx.js</code> file. تستفيد الدردشة من نفس الإصلاح عبر تحميل
+          مكتبات acorn وacorn-walk قبل الملف الموحد <code>mishkah-htmlx.js</code>.
+        </p>
+      </header>
+
+      <section class="chat-panel">
+        <div class="messages empty" id="messages"></div>
+
+        <form id="chat-form">
+          <div>
+            <label for="author">Name · الاسم</label>
+            <input id="author" name="author" type="text" placeholder="Aisha" required />
+          </div>
+
+          <div>
+            <label for="message">Message · الرسالة</label>
+            <textarea
+              id="message"
+              name="message"
+              rows="3"
+              placeholder="Share how the Mishkah HTMLx update helps you..."
+              required
+            ></textarea>
+          </div>
+
+          <button type="submit">Send · إرسال</button>
+        </form>
+      </section>
+    </main>
+
+    <template id="message-template">
+      <article class="message">
+        <div class="message-header">
+          <span class="message-author">{{ author }}</span>
+          <span class="message-time">{{ timestamp }}</span>
+        </div>
+        <p class="message-content">{{ content }}</p>
+      </article>
+    </template>
+
+    <script>
+      window.addEventListener('DOMContentLoaded', function () {
+        var messages = [];
+        var messagesContainer = document.getElementById('messages');
+        var template = document.getElementById('message-template').innerHTML;
+        var form = document.getElementById('chat-form');
+
+        function renderMessages() {
+          if (!messages.length) {
+            messagesContainer.classList.add('empty');
+            messagesContainer.innerHTML = '';
+            return;
+          }
+
+          messagesContainer.classList.remove('empty');
+          messagesContainer.innerHTML = messages
+            .map(function (entry) {
+              return MishkahHTMLx.render(template, entry);
+            })
+            .join('');
+        }
+
+        form.addEventListener('submit', function (event) {
+          event.preventDefault();
+          var formData = new FormData(form);
+          var author = formData.get('author') || 'Guest';
+          var content = formData.get('message') || '';
+
+          if (!content.trim()) {
+            return;
+          }
+
+          messages.unshift({
+            author: author,
+            content: content,
+            timestamp: new Date().toLocaleTimeString()
+          });
+
+          if (messages.length > 12) {
+            messages.pop();
+          }
+
+          renderMessages();
+          form.reset();
+          form.querySelector('input, textarea').focus();
+        });
+
+        renderMessages();
+      });
+    </script>
+  </body>
+</html>
