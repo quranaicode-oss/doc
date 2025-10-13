@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mishkah HTMLx Playground V2</title>
+    <meta
+      name="description"
+      content="Enhanced Mishkah HTMLx demo showing interactive rendering with the secure evaluator fix."
+    />
+    <script src="https://cdn.jsdelivr.net/npm/acorn@8/dist/acorn.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/acorn-walk@8/dist/walk.min.js" defer></script>
+    <script src="./mishkah-htmlx.js" defer></script>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f5f7fb;
+        --panel: #ffffff;
+        --accent: #005d9a;
+        --accent-soft: rgba(0, 93, 154, 0.1);
+        --border: rgba(15, 23, 42, 0.08);
+        --shadow: rgba(15, 23, 42, 0.14);
+        font-family: 'Cairo', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        background: linear-gradient(135deg, #ffffff 0%, var(--bg) 100%);
+        padding: 2.5rem 1.25rem 3.5rem;
+        display: flex;
+        justify-content: center;
+      }
+
+      main {
+        width: min(1080px, 100%);
+        background-color: var(--panel);
+        border-radius: 18px;
+        box-shadow: 0 24px 48px var(--shadow);
+        border: 1px solid var(--border);
+        padding: 2.75rem;
+      }
+
+      header h1 {
+        margin: 0 0 1rem;
+        font-size: clamp(1.8rem, 3vw, 2.8rem);
+        color: #0a2540;
+      }
+
+      header p {
+        margin: 0;
+        font-size: 1.05rem;
+        line-height: 1.7;
+        color: #1f3850;
+      }
+
+      .layout {
+        margin-top: 2.5rem;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 2rem;
+        align-items: flex-start;
+      }
+
+      form {
+        padding: 1.5rem;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background-color: var(--panel);
+        display: grid;
+        gap: 1rem;
+      }
+
+      label {
+        font-weight: 600;
+        color: #102b4a;
+        display: block;
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid rgba(15, 23, 42, 0.1);
+        padding: 0.65rem 0.75rem;
+        font-size: 1rem;
+        font-family: inherit;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      input:focus,
+      textarea:focus,
+      select:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+      }
+
+      button {
+        background-color: var(--accent);
+        color: #ffffff;
+        border: none;
+        border-radius: 999px;
+        padding: 0.75rem 1.75rem;
+        font-size: 1rem;
+        cursor: pointer;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      button:hover,
+      button:focus {
+        transform: translateY(-1px);
+        box-shadow: 0 12px 24px rgba(0, 93, 154, 0.25);
+        outline: none;
+      }
+
+      #preview,
+      #history-panel {
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 1.75rem;
+        background-color: var(--panel);
+        min-height: 220px;
+      }
+
+      #preview h2 {
+        margin: 0 0 0.75rem;
+        color: #0c3357;
+      }
+
+      #preview p {
+        margin: 0 0 1rem;
+        line-height: 1.6;
+        color: #243c57;
+      }
+
+      #preview ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 0.5rem;
+      }
+
+      #preview ul li {
+        padding: 0.6rem 0.75rem;
+        border-radius: 10px;
+        background-color: var(--accent-soft);
+        color: #0f2a45;
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+
+      #history-panel h3 {
+        margin: 0 0 1rem;
+        color: #0f2b44;
+      }
+
+      #history {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      #history li {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.75rem 1rem;
+        border-radius: 10px;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        background-color: rgba(0, 93, 154, 0.05);
+        color: #13375c;
+      }
+
+      #history time {
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Mishkah HTMLx Playground V2 · منصة Mishkah HTMLx الإصدار الثاني</h1>
+        <p>
+          Update the form to see Mishkah HTMLx render bilingual summaries in real time.
+          عدل الحقول لترى كيف يُعيد Mishkah HTMLx بناء الملخص ثنائي اللغة مباشرة.
+        </p>
+      </header>
+
+      <div class="layout">
+        <form id="story-form">
+          <div>
+            <label for="topic">Topic · الموضوع</label>
+            <input id="topic" name="topic" type="text" placeholder="Quality Assurance" />
+          </div>
+
+          <div>
+            <label for="tone">Tone · النبرة</label>
+            <select id="tone" name="tone">
+              <option value="professional">Professional · احترافي</option>
+              <option value="friendly">Friendly · ودي</option>
+              <option value="urgent">Urgent · عاجل</option>
+            </select>
+          </div>
+
+          <div>
+            <label for="details">Details · التفاصيل</label>
+            <textarea
+              id="details"
+              name="details"
+              rows="4"
+              placeholder="Share the latest Mishkah HTMLx deployment notes here..."
+            ></textarea>
+          </div>
+
+          <button type="submit">Save Snapshot · حفظ اللقطة</button>
+        </form>
+
+        <section id="preview"></section>
+        <section id="history-panel">
+          <h3>Snapshots · اللقطات المحفوظة</h3>
+          <ul id="history"></ul>
+        </section>
+      </div>
+    </main>
+
+    <template id="preview-template">
+      <article>
+        <h2>{{ title }}</h2>
+        <p>{{ description }}</p>
+        <ul>
+          {{{ summaryHtml }}}
+        </ul>
+      </article>
+    </template>
+
+    <template id="history-template">
+      <li>
+        <time>{{ timestamp }}</time>
+        <span>{{ label }}</span>
+      </li>
+    </template>
+
+    <script>
+      window.addEventListener('DOMContentLoaded', function () {
+        var form = document.getElementById('story-form');
+        var previewRenderer = MishkahHTMLx.createRenderer('preview-template', '#preview');
+        var historyList = document.getElementById('history');
+        var historyTemplate = document.getElementById('history-template').innerHTML;
+        var snapshots = [];
+
+        function buildSummaryHtml(data) {
+          var items = [
+            {
+              en: 'Topic: ' + data.topic,
+              ar: 'الموضوع: ' + data.topic
+            },
+            {
+              en: 'Tone: ' + data.toneLabel,
+              ar: 'النبرة: ' + data.toneLabelAr
+            },
+            {
+              en: 'Details: ' + (data.details || 'N/A'),
+              ar: 'التفاصيل: ' + (data.details || 'لا يوجد')
+            }
+          ];
+
+          return items
+            .map(function (item) {
+              return '<li><span>' + MishkahHTMLx.escape(item.en) + '</span><span>' + MishkahHTMLx.escape(item.ar) + '</span></li>';
+            })
+            .join('');
+        }
+
+        function collectFormData() {
+          var formData = new FormData(form);
+          var tone = formData.get('tone') || 'professional';
+          var toneLookup = {
+            professional: {
+              en: 'Professional',
+              ar: 'احترافي'
+            },
+            friendly: {
+              en: 'Friendly',
+              ar: 'ودي'
+            },
+            urgent: {
+              en: 'Urgent',
+              ar: 'عاجل'
+            }
+          };
+
+          return {
+            topic: formData.get('topic') || 'Quality Assurance',
+            tone: tone,
+            toneLabel: toneLookup[tone].en,
+            toneLabelAr: toneLookup[tone].ar,
+            details: formData.get('details') || ''
+          };
+        }
+
+        function renderPreview() {
+          var data = collectFormData();
+          var context = {
+            title: data.topic + ' · ' + data.toneLabel,
+            description:
+              'Live summary using Mishkah HTMLx. ملخص مباشر باستخدام Mishkah HTMLx.',
+            summaryHtml: buildSummaryHtml(data)
+          };
+
+          previewRenderer(context);
+        }
+
+        function renderHistory() {
+          var markup = snapshots
+            .map(function (snapshot) {
+              return MishkahHTMLx.render(historyTemplate, snapshot);
+            })
+            .join('');
+
+          historyList.innerHTML = markup;
+        }
+
+        form.addEventListener('input', function () {
+          renderPreview();
+        });
+
+        form.addEventListener('submit', function (event) {
+          event.preventDefault();
+          var data = collectFormData();
+          snapshots.unshift({
+            timestamp: new Date().toLocaleTimeString(),
+            label: data.topic + ' · ' + data.toneLabel + ' / ' + data.toneLabelAr
+          });
+          if (snapshots.length > 6) {
+            snapshots.pop();
+          }
+          renderHistory();
+        });
+
+        renderPreview();
+        renderHistory();
+      });
+    </script>
+  </body>
+</html>
