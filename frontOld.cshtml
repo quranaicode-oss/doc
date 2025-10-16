@@ -1112,6 +1112,86 @@ var docid = '';
 var isRequestInProgress = false;
 
 
+function ensureSwitchSelectsOverflow() {
+    // Restore dropdown behaviour for the language/theme/template switchers
+    // استعادة سلوك القوائم المنسدلة لمفاتيح تبديل اللغة / الثيم / القوالب
+    const selectQueries = [
+        '#languageSwitch',
+        '#themeSwitch',
+        '#templateSwitch',
+        'select[id*="LanguageSwitch"]',
+        'select[id*="ThemeSwitch"]',
+        'select[id*="TemplateSwitch"]',
+        'select[data-switch-role]',
+        'select[data-switch-type]'
+    ];
+    const containerQueries = [
+        '.switch-select-wrapper',
+        '.switch-select',
+        '.shell-switches',
+        '.global-switch-select',
+        '.switch-item',
+        '.switch-container'
+    ];
+
+    const handledContainers = new Set();
+    selectQueries.forEach(selector => {
+        document.querySelectorAll(selector).forEach(selectEl => {
+            selectEl.style.maxHeight = 'none';
+            selectEl.style.overflow = 'visible';
+
+            for (const containerSelector of containerQueries) {
+                const wrapper = selectEl.closest(containerSelector);
+                if (wrapper && !handledContainers.has(wrapper)) {
+                    handledContainers.add(wrapper);
+                }
+            }
+        });
+    });
+
+    handledContainers.forEach(wrapper => {
+        wrapper.style.maxHeight = 'none';
+        wrapper.style.overflow = 'visible';
+        if (window.getComputedStyle(wrapper).position === 'relative') {
+            wrapper.style.position = 'static';
+        }
+    });
+
+    handledContainers.forEach(wrapper => {
+        const parent = wrapper.parentElement;
+        if (!parent || handledContainers.has(parent)) return;
+        if (/switch/i.test(parent.className || '')) {
+            parent.style.overflow = 'visible';
+            parent.style.maxHeight = 'none';
+        }
+    });
+}
+
+function toggleTemplateSwitchForMobile() {
+    // Hide template switching when the viewport is mobile sized
+    // إخفاء تبديل القوالب عندما يكون العرض خاصًا بالأجهزة المحمولة
+    const hideForMobile = window.matchMedia('(max-width: 768px)').matches;
+    const templateSelectors = [
+        '#templateSwitch',
+        '.template-switch',
+        '.template-switcher',
+        'select[id*="TemplateSwitch"]',
+        '[data-switch-type="template"]'
+    ];
+
+    templateSelectors.forEach(selector => {
+        document.querySelectorAll(selector).forEach(templateEl => {
+            const host = templateEl.closest('.switch-select-wrapper, .switch-select, .template-switch-wrapper, .switch-item') || templateEl;
+            const element = host;
+            if (!element.dataset.originalDisplay) {
+                element.dataset.originalDisplay = element.style.display || '';
+            }
+            element.style.display = hideForMobile ? 'none' : element.dataset.originalDisplay;
+        });
+    });
+}
+
+
 function showLoading(element = null, loadingText = ' جارِ التحميل...') {
   if (element) {
     element.setAttribute('data-original-content', element.innerHTML);
@@ -1683,6 +1763,10 @@ function UpdateCurrentDocumnent(){
 
 
 $(document).ready(function () {
+    ensureSwitchSelectsOverflow();
+    toggleTemplateSwitchForMobile();
+    $(window).off('resize', toggleTemplateSwitchForMobile).on('resize', toggleTemplateSwitchForMobile);
+
     let today = new Date().toISOString().substr(0, 10);
     let thirtyDaysAgo = new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().substr(0, 10);
     $('#recordFrom').val(thirtyDaysAgo);
@@ -2009,6 +2093,10 @@ $(document).ready(function () {
 </div>
 <script>
     $(document).ready(function () {
+        ensureSwitchSelectsOverflow();
+        toggleTemplateSwitchForMobile();
+        $(window).off('resize', toggleTemplateSwitchForMobile).on('resize', toggleTemplateSwitchForMobile);
+
         // فتح مودال إضافة مستند جديد عند النقر على الزر العام
         $('#addNewDocxButton').click(function () {
             $('#addNewDocxModal').modal('show');
