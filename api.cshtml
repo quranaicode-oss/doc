@@ -440,8 +440,8 @@
         }
 
         string sanitized = relativePath
-            .Replace('/', Path.DirectorySeparatorChar)
-            .Replace('\', Path.DirectorySeparatorChar)
+            .Replace("/", Path.DirectorySeparatorChar.ToString())
+            .Replace("\\", Path.DirectorySeparatorChar.ToString())
             .Trim();
 
         while (sanitized.StartsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal))
