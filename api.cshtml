@@ -2226,21 +2226,100 @@ private static JsonParagraph ParseParagraph(Wp.Paragraph para, int elementId, Ma
 
     private static void CalculateRowSpans(JsonTable jsonTable)
     {
+        if (jsonTable?.Content == null || jsonTable.Content.Count == 0)
+        {
+            return;
+        }
+
+        var rowCoverageMaps = new List<List<int>>();
+        foreach (var row in jsonTable.Content)
+        {
+            var coverage = new List<int>();
+            if (row?.Cells != null)
+            {
+                for (int cellIndex = 0; cellIndex < row.Cells.Count; cellIndex++)
+                {
+                    var cell = row.Cells[cellIndex];
+                    int span = Math.Max(1, cell?.GridSpan ?? 1);
+                    for (int offset = 0; offset < span; offset++)
+                    {
+                        coverage.Add(cellIndex);
+                    }
+                }
+            }
+            rowCoverageMaps.Add(coverage);
+        }
+
         for (int rowIndex = 0; rowIndex < jsonTable.Content.Count; rowIndex++)
         {
             var row = jsonTable.Content[rowIndex];
-            for (int colIndex = 0; colIndex < row.Cells.Count; colIndex++)
+            if (row?.Cells == null || row.Cells.Count == 0)
             {
-                var cell = row.Cells[colIndex];
-                if (cell.VerticalMerge == "Restart")
+                continue;
+            }
+
+            var rowMap = rowCoverageMaps[rowIndex];
+            for (int cellIndex = 0; cellIndex < row.Cells.Count; cellIndex++)
+            {
+                var cell = row.Cells[cellIndex];
+                if (cell == null || !string.Equals(cell.VerticalMerge, "Restart", StringComparison.OrdinalIgnoreCase))
                 {
-                    int rowspan = 1;
-                    for (int nextRow = rowIndex + 1; nextRow < jsonTable.Content.Count; nextRow++)
-                    {
-                        if (colIndex < jsonTable.Content[nextRow].Cells.Count && jsonTable.Content[nextRow].Cells[colIndex].VerticalMerge == "Continue") { rowspan++; } else { break; }
-                    }
-                    cell.rowSpan = rowspan;
+                    cell.rowSpan = null;
+                    continue;
                 }
+
+                int span = Math.Max(1, cell.GridSpan);
+                int startColumn = rowMap.IndexOf(cellIndex);
+                if (startColumn < 0)
+                {
+                    cell.rowSpan = null;
+                    continue;
+                }
+
+                int rowspan = 1;
+                for (int nextRowIndex = rowIndex + 1; nextRowIndex < jsonTable.Content.Count; nextRowIndex++)
+                {
+                    var nextRow = jsonTable.Content[nextRowIndex];
+                    var nextMap = rowCoverageMaps[nextRowIndex];
+                    if (nextRow?.Cells == null || nextMap == null)
+                    {
+                        break;
+                    }
+
+                    bool continuesMerge = true;
+                    for (int offset = 0; offset < span; offset++)
+                    {
+                        int lookupColumn = startColumn + offset;
+                        if (lookupColumn >= nextMap.Count)
+                        {
+                            continuesMerge = false;
+                            break;
+                        }
+
+                        int mappedCellIndex = nextMap[lookupColumn];
+                        if (mappedCellIndex < 0 || mappedCellIndex >= nextRow.Cells.Count)
+                        {
+                            continuesMerge = false;
+                            break;
+                        }
+
+                        var candidateCell = nextRow.Cells[mappedCellIndex];
+                        if (!string.Equals(candidateCell?.VerticalMerge, "Continue", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continuesMerge = false;
+                            break;
+                        }
+                    }
+
+                    if (!continuesMerge)
+                    {
+                        break;
+                    }
+
+                    rowspan++;
+                }
+
+                cell.rowSpan = rowspan > 1 ? rowspan : (int?)null;
             }
         }
     }
